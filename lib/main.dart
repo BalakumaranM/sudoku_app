@@ -78,6 +78,7 @@ class FallingObject {
   double axisZ;
   double rotationSpeed; // Rotation speed multiplier (0.8-1.5)
   double rotationPhase; // Phase offset for unique starting rotation (0-2π)
+  bool isBeingDragged; // Whether this object is currently being dragged
   FallingObject({
     required this.id, 
     required this.col, 
@@ -91,6 +92,7 @@ class FallingObject {
     required this.axisZ,
     required this.rotationSpeed,
     required this.rotationPhase,
+    this.isBeingDragged = false,
   });
 }
 
@@ -986,7 +988,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     // Move objects and rotate them with unique patterns for each object
     setState(() {
       for (var obj in _fallingObjects) {
-        obj.y += 0.002; // Fall speed
+        // Skip vertical movement for objects being dragged
+        if (!obj.isBeingDragged) {
+          obj.y += 0.002; // Fall speed
+        }
         
         // Calculate rotation angle for this object using its unique speed and phase
         // Base rotation from controller (0 to 2π, seamless loop)
@@ -1064,6 +1069,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         axisZ: normalizedZ,
         rotationSpeed: speed,
         rotationPhase: phase,
+        isBeingDragged: false,
       ));
     });
   }
@@ -1237,15 +1243,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _selectCell(int row, int col) {
-    // For hard mode, check if there's a falling object over this cell
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
-      final FallingObject? objOverCell = _findFallingObjectOverCell(row, col);
-      if (objOverCell != null) {
-        // Place the falling object in the cell
-        _handleFallingObjectPlacement(objOverCell, row, col);
-        return;
-      }
-    }
+    // Hard mode now uses drag-and-drop for falling objects
+    // Tap-based placement is disabled in favor of drag-and-drop
+    // (Keeping this method for other selection logic if needed)
     
     setState(() {
       // Reset draft if changing cells
@@ -1306,37 +1306,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     if (_history.length > 20) _history.removeAt(0); 
   }
 
-  void _handleFallingTap(FallingObject obj) {
-    // Calculate which row the object is over using board's actual position
-    final BuildContext? boardContext = _boardKey.currentContext;
-    if (boardContext == null) return;
-    
-    final RenderBox? renderBox = boardContext.findRenderObject() as RenderBox?;
-    if (renderBox == null) return;
-    
-    // Get board's global position
-    final Offset boardPosition = renderBox.localToGlobal(Offset.zero);
-    final double boardTop = boardPosition.dy;
-    final double boardHeight = renderBox.size.height;
-    final double cellHeight = boardHeight / _gridSize;
-    final double cellWidth = renderBox.size.width / _gridSize;
-    
-    // Convert obj.y (0.0-1.0 screen height) to screen coordinates - obj.y is the TOP of the object
-    final double screenHeight = MediaQuery.of(boardContext).size.height;
-    final double objTopY = obj.y * screenHeight;
-    // Calculate the CENTER of the object (object is cellWidth x cellWidth)
-    final double objCenterY = objTopY + (cellWidth / 2);
-    
-    // Calculate which row the object's center is over
-    final double relativeY = objCenterY - boardTop;
-    if (relativeY < 0 || relativeY >= boardHeight) return; // Out of bounds
-    
-    final int rowEstimate = (relativeY / cellHeight).floor();
-    if (rowEstimate < 0 || rowEstimate >= _gridSize) return; // Out of bounds
-    
-    // Use the placement handler
-    _handleFallingObjectPlacement(obj, rowEstimate, obj.col);
-  }
   
   void _handleMistake() {
     setState(() {
@@ -1960,8 +1929,34 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
             top: y,
             width: cellWidth, 
             height: cellWidth,
-            child: GestureDetector(
-              onTap: () => _handleFallingTap(obj),
+            child: Draggable<FallingObject>(
+              data: obj,
+              feedback: Material(
+                color: Colors.transparent,
+                child: SizedBox(
+                  width: cellWidth,
+                  height: cellWidth,
+                  child: rotatedContent,
+                ),
+              ),
+              childWhenDragging: const SizedBox.shrink(),
+              onDragStarted: () {
+                setState(() {
+                  obj.isBeingDragged = true;
+                });
+              },
+              onDragEnd: (details) {
+                setState(() {
+                  obj.isBeingDragged = false;
+                });
+                // If drag was not accepted (dropped outside valid target), treat as mistake
+                if (!details.wasAccepted) {
+                  _handleMistake();
+                  setState(() {
+                    _fallingObjects.remove(obj);
+                  });
+                }
+              },
               child: rotatedContent,
             ),
           );
@@ -2057,51 +2052,98 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           // Calculate 3D rotation angle for hard mode (seamless 4-second loop)
                           double rotationAngle = 0.0;
                           if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && value > 0) {
-                            // Use different rotation speeds per cell for variety
-                            // Use integer multipliers (1, 2, 3) for seamless looping
+                            // Use deterministic pseudo-random generator for unique rotation per cell
                             final int cellIndex = row * _gridSize + col;
-                            final int speedMultiplier = 1 + (cellIndex % 3); // 1, 2, or 3 (integers for seamless loop)
+                            final math.Random cellRnd = math.Random(cellIndex);
+                            
+                            // Unique rotation speed per cell (0.7x to 1.4x of base controller speed)
+                            final double rotationSpeed = 0.7 + (cellRnd.nextDouble() * 0.7);
+                            
+                            // Unique phase offset so cells start at different angles
+                            final double phaseOffset = cellRnd.nextDouble() * 2 * math.pi;
+                            
                             // Calculate rotation: controller goes 0-1, multiply by 2π for full rotation
-                            rotationAngle = (_rotationController.value * 2 * math.pi * speedMultiplier);
+                            // Add phase offset for unique starting angle
+                            rotationAngle = (_rotationController.value * 2 * math.pi * rotationSpeed) + phaseOffset;
                             // Axis tilt is calculated in the cell widget itself for each cell
                           }
                           
                           final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
                           final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
 
-                          return Expanded(
-                            child: Container(
+                          Widget cellWidget = _SudokuCell(
+                            value: value,
+                            notes: _notes[row][col],
+                            shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
+                            colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
+                            numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
+                            draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
+                            rotationAngle: rotationAngle, 
+                            row: row,
+                            col: col,
+                            gridSize: _gridSize,
+                            isEditable: isEditable,
+                            isSelected: isSelected,
+                            isInvalid: isInvalid,
+                            highlight: highlight,
+                            isAnimated: isAnimated,
+                            gameMode: widget.mode,
+                            difficulty: widget.difficulty,
+                            combinedCell: combinedCell,
+                            selectedElement: null, 
+                            shapeId: _shapeMap[value > 0 ? value - 1 : 0],
+                            shapeMap: _shapeMap, 
+                            onTap: () => _selectCell(row, col),
+                          );
+                          
+                          // Wrap with DragTarget for hard mode falling objects
+                          if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+                            cellWidget = DragTarget<FallingObject>(
+                              onWillAccept: (data) {
+                                // Only accept if cell is editable and empty
+                                return isEditable && value == 0;
+                              },
+                              onAccept: (obj) {
+                                // Place the falling object in this cell
+                                _handleFallingObjectPlacement(obj, row, col);
+                              },
+                              builder: (context, candidateData, rejectedData) {
+                                // Provide visual feedback when dragging over valid/invalid cells
+                                Color borderColor = rightBorder || bottomBorder 
+                                    ? kRetroText.withOpacity(0.6) 
+                                    : kRetroText.withOpacity(0.1);
+                                if (candidateData.isNotEmpty && isEditable && value == 0) {
+                                  borderColor = kRetroHighlight; // Highlight valid drop target
+                                } else if (rejectedData.isNotEmpty) {
+                                  borderColor = Colors.red.withOpacity(0.5); // Highlight invalid drop target
+                                }
+                                
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    border: Border(
+                                      right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : borderColor, width: rightBorder ? 2 : 0.5),
+                                      bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : borderColor, width: bottomBorder ? 2 : 0.5),
+                                    ),
+                                  ),
+                                  child: cellWidget,
+                                );
+                              },
+                            );
+                          } else {
+                            // Non-hard mode: wrap in container with border
+                            cellWidget = Container(
                               decoration: BoxDecoration(
                                 border: Border(
                                   right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: rightBorder ? 2 : 0.5),
                                   bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: bottomBorder ? 2 : 0.5),
                                 ),
                               ),
-                              child: _SudokuCell(
-                                value: value,
-                                notes: _notes[row][col],
-                                shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
-                                colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
-                                numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
-                                draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
-                                rotationAngle: rotationAngle, 
-                                row: row,
-                                col: col,
-                                gridSize: _gridSize,
-                                isEditable: isEditable,
-                                isSelected: isSelected,
-                                isInvalid: isInvalid,
-                                highlight: highlight,
-                                isAnimated: isAnimated,
-                                gameMode: widget.mode,
-                                difficulty: widget.difficulty,
-                                combinedCell: combinedCell,
-                                selectedElement: null, 
-                                shapeId: _shapeMap[value > 0 ? value - 1 : 0],
-                                shapeMap: _shapeMap, 
-                                onTap: () => _selectCell(row, col),
-                              ),
-                            ),
+                              child: cellWidget,
+                            );
+                          }
+                          
+                          return Expanded(
+                            child: cellWidget,
                           );
                         }),
                       ),
