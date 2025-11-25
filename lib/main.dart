@@ -951,7 +951,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 800),
     );
     
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+    // Start falling ticker only for Hard mode with shapes/colors (modes that use combined puzzles)
+    final bool useCombinedPuzzle = widget.difficulty == Difficulty.hard && 
+        widget.mode != GameMode.numbers &&
+        widget.mode != GameMode.planets &&
+        widget.mode != GameMode.custom &&
+        widget.mode != GameMode.cosmic;
+    if (useCombinedPuzzle) {
       _fallingTicker = createTicker(_onFallingTick);
       _fallingTicker.start();
     }
@@ -1197,7 +1203,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _rotationController.dispose();
     _completionController.dispose();
     _groupCompletionController.dispose();
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+    // Dispose falling ticker only if it was created (same condition as init)
+    final bool useCombinedPuzzle = widget.difficulty == Difficulty.hard && 
+        widget.mode != GameMode.numbers &&
+        widget.mode != GameMode.planets &&
+        widget.mode != GameMode.custom &&
+        widget.mode != GameMode.cosmic;
+    if (useCombinedPuzzle) {
       _fallingTicker.dispose();
     }
     super.dispose();
@@ -1219,6 +1231,14 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   void _handleFallingObjectPlacement(FallingObject obj, int row, int col) {
     if (!_isEditable[row][col] || _board[row][col] != 0) {
       _handleMistake();
+      setState(() {
+        _fallingObjects.remove(obj);
+      });
+      return;
+    }
+    
+    // Safety check: combined puzzle must exist for hard mode placement
+    if (_combinedPuzzle == null) {
       setState(() {
         _fallingObjects.remove(obj);
       });
@@ -1615,6 +1635,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final bool isHard = widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers;
+    // Only show falling objects UI if combined puzzle exists (shapes/colors modes)
+    final bool isHardWithFallingObjects = isHard && _combinedPuzzle != null;
     
     return WillPopScope(
       onWillPop: () async {
@@ -1678,7 +1700,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                       padding: const EdgeInsets.all(16),
                       child: Stack(
                         children: [
-                          if (isHard) _buildSpaceship(context),
+                          if (isHardWithFallingObjects) _buildSpaceship(context),
                           _buildBoard(context),
                         ],
                       ),
@@ -1693,8 +1715,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 ],
               ),
             ),
-            // Falling objects overlay - covers entire Scaffold body
-            if (isHard)
+            // Falling objects overlay - covers entire Scaffold body (only for modes with combined puzzle)
+            if (isHardWithFallingObjects)
               AnimatedBuilder(
                 animation: _rotationController,
                 builder: (context, child) => _buildFallingObjects(),
@@ -2057,8 +2079,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             onTap: () => _selectCell(row, col),
                           );
 
-                          // Wrap with DragTarget for hard mode falling objects
-                          if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+                          // Wrap with DragTarget for hard mode falling objects (only if combined puzzle exists)
+                          if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && _combinedPuzzle != null) {
                             cellWidget = DragTarget<FallingObject>(
                               onWillAcceptWithDetails: (details) {
                                 // Only accept if cell is editable and empty
@@ -2492,8 +2514,8 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     // Standard mode
     Widget content;
     if (widget.value > 0 || (widget.combinedCell != null && (widget.combinedCell!.shapeId != null || widget.combinedCell!.colorId != null || widget.combinedCell!.numberId != null))) {
-       if (widget.difficulty == Difficulty.hard && widget.gameMode != GameMode.numbers) {
-          // Hard mode: Apply 3D rotation around tilted vertical axis
+       if (widget.difficulty == Difficulty.hard && widget.gameMode != GameMode.numbers && widget.combinedCell != null) {
+          // Hard mode with combined puzzle: Apply 3D rotation around tilted vertical axis
           Widget combined = _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor);
           if (widget.rotationAngle != 0.0) {
             // Calculate unique axis tilt for this cell (small angles to keep face visible)
