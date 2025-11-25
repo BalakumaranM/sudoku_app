@@ -912,14 +912,14 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _initializeGridSize() {
-    // Easy: 6x6, Medium/Hard: 9x9
-    if (widget.difficulty == Difficulty.easy) {
-      _gridSize = 6;
-      _blockRows = 2;
-      _blockCols = 3;
-    } else {
+    // Easy: 6x6, Medium: 6x6, Hard: 9x9
+    if (widget.difficulty == Difficulty.hard) {
       _gridSize = 9;
       _blockRows = 3;
+      _blockCols = 3;
+    } else {
+      _gridSize = 6;
+      _blockRows = 2;
       _blockCols = 3;
     }
   }
@@ -943,8 +943,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _generateLevelLogic() {
-    // Hard mode uses CombinedPuzzleGenerator for shapes/colors modes
-    if (widget.difficulty == Difficulty.hard && 
+    // Medium and Hard modes use CombinedPuzzleGenerator for shapes/colors modes
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && 
         widget.mode != GameMode.numbers && 
         widget.mode != GameMode.planets &&
         widget.mode != GameMode.custom &&
@@ -969,15 +969,15 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
          for (int c = 0; c < _gridSize; c++) {
             final cell = _combinedPuzzle!.initialBoard[r][c];
             bool isFixed = cell.isFixed;
-               if (widget.initialState == null) {
-                  _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
-               }
-               _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
+            if (widget.initialState == null) {
+              _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
+            }
+            _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
          }
        }
        _sudokuPuzzle = null;
     } else {
-       // Easy and Medium modes use LevelGenerator for all modes
+       // Easy mode uses LevelGenerator for all modes
        // For Easy mode: route odd levels to planets, even levels to cosmic
        int modeIndex = widget.mode.index;
        if (widget.difficulty == Difficulty.easy && 
