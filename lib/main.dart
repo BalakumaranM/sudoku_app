@@ -1748,16 +1748,20 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       final double boardLength = math.min(constraints.maxWidth, constraints.maxHeight);
       final double spaceshipWidth = boardLength * 0.8;
       final double spaceshipHeight = 80;
-      final double spaceshipTop = -spaceshipHeight - 20; // Position above board
       
-      return Positioned(
-        left: (constraints.maxWidth - spaceshipWidth) / 2,
-        top: spaceshipTop,
-        width: spaceshipWidth,
-        height: spaceshipHeight,
-        child: CustomPaint(
-          painter: SpaceshipPainter(),
-          size: Size(spaceshipWidth, spaceshipHeight),
+      // Use Align + Transform instead of Positioned (which requires direct Stack parent)
+      return Align(
+        alignment: Alignment.topCenter,
+        child: Transform.translate(
+          offset: Offset(0, -spaceshipHeight - 20),
+          child: SizedBox(
+            width: spaceshipWidth,
+            height: spaceshipHeight,
+            child: CustomPaint(
+              painter: SpaceshipPainter(),
+              size: Size(spaceshipWidth, spaceshipHeight),
+            ),
+          ),
         ),
       );
     });
