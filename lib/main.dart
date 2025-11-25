@@ -1204,44 +1204,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  /// Find a falling object that is currently over the specified cell
-  FallingObject? _findFallingObjectOverCell(int row, int col) {
-    final BuildContext? boardContext = _boardKey.currentContext;
-    if (boardContext == null) return null;
-    
-    final RenderBox? renderBox = boardContext.findRenderObject() as RenderBox?;
-    if (renderBox == null) return null;
-    
-    // Get board's global position
-    final Offset boardPosition = renderBox.localToGlobal(Offset.zero);
-    final double boardTop = boardPosition.dy;
-    final double boardHeight = renderBox.size.height;
-    final double cellHeight = boardHeight / _gridSize;
-    final double cellWidth = renderBox.size.width / _gridSize;
-    
-    // Calculate cell's vertical bounds
-    final double cellTop = boardTop + (row * cellHeight);
-    final double cellBottom = cellTop + cellHeight;
-    
-    // Find falling object in this column that is within the cell's vertical bounds
-    final double screenHeight = MediaQuery.of(boardContext).size.height;
-    for (var obj in _fallingObjects) {
-      if (obj.col != col) continue; // Must be in the same column
-      
-      // Convert obj.y (0.0-1.0) to screen coordinates - obj.y is the TOP of the object
-      final double objTopY = obj.y * screenHeight;
-      // Calculate the CENTER of the object (object is cellWidth x cellWidth)
-      final double objCenterY = objTopY + (cellWidth / 2);
-      
-      // Check if object's center is within the cell's bounds (smaller tolerance for precision)
-      if (objCenterY >= cellTop && objCenterY <= cellBottom) {
-        return obj;
-      }
-    }
-    
-    return null;
-  }
-
   void _selectCell(int row, int col) {
     // Hard mode now uses drag-and-drop for falling objects
     // Tap-based placement is disabled in favor of drag-and-drop
