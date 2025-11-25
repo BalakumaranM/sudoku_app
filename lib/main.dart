@@ -1695,18 +1695,54 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   
   Widget _buildInputBar(BuildContext context) {
     if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
+       final ElementType? selectedElement = _combinedPuzzle?.selectedElement;
+       String solveByText = "Solve by: ";
+       if (selectedElement != null) {
+         switch (selectedElement) {
+           case ElementType.shape:
+             solveByText += "SHAPES";
+             break;
+           case ElementType.color:
+             solveByText += "COLORS";
+             break;
+           case ElementType.number:
+             solveByText += "NUMBERS";
+             break;
+         }
+       }
+       
        return Container(
-         height: 160,
-         padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
+         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
          decoration: BoxDecoration(color: kRetroSurface, border: Border(top: BorderSide(color: kRetroAccent, width: 4))),
          child: Column(
            mainAxisSize: MainAxisSize.min,
            children: [
-             _buildInputRow(ElementType.number),
-             const SizedBox(height: 1),
-             _buildInputRow(ElementType.color),
-             const SizedBox(height: 1),
-             _buildInputRow(ElementType.shape),
+             if (selectedElement != null)
+               Padding(
+                 padding: const EdgeInsets.symmetric(vertical: 4),
+                 child: Text(
+                   solveByText,
+                   style: TextStyle(
+                     fontSize: 14,
+                     fontWeight: FontWeight.bold,
+                     color: kRetroHighlight,
+                   ),
+                 ),
+               ),
+             Container(
+               height: 160,
+               padding: const EdgeInsets.fromLTRB(0, 2, 0, 4),
+               child: Column(
+                 mainAxisSize: MainAxisSize.min,
+                 children: [
+                   _buildInputRow(ElementType.number),
+                   const SizedBox(height: 1),
+                   _buildInputRow(ElementType.color),
+                   const SizedBox(height: 1),
+                   _buildInputRow(ElementType.shape),
+                 ],
+               ),
+             ),
            ],
          ),
        );
