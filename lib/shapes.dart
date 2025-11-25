@@ -79,10 +79,6 @@ class _SudokuShapePainter extends CustomPainter {
 
   void _drawTriangle(Canvas canvas, Offset center, double radius, Paint paint, Paint roundedPaint) {
     // Equilateral triangle pointing UP
-    final double h = radius * 1.8;
-    final double w = h * 1.155; // h / (sqrt(3)/2)
-    final double yTop = center.dy - (2/3 * h * 0.6); // Adjust visual center
-    final double yBottom = yTop + h;
     
     final Path path = Path()
       ..moveTo(center.dx, center.dy - radius)

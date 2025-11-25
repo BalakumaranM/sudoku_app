@@ -1842,8 +1842,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     final int? colorId = cell.colorId;
     final int? numberId = cell.numberId;
 
-    // Hard mode uses cosmic style
-    final bool useCosmicStyle = widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers;
     
     final Color shapeColor = colorId != null 
         ? _getColorForValue(colorId)
@@ -1853,9 +1851,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     if (shapeId != null) {
       shapeWidget = Padding(
         padding: const EdgeInsets.all(4),
-        child: useCosmicStyle
-            ? CosmicGlyph(shapeId: shapeId, color: shapeColor)
-            : SudokuShape(id: shapeId, color: shapeColor), 
+        child: SudokuShape(id: shapeId, color: shapeColor),
       );
     } else if (colorId != null) {
        shapeWidget = Container(
@@ -1870,28 +1866,19 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
     Widget? numberWidget;
     if (numberId != null) {
-      // For cosmic style, use semi-transparent black or deep blue for contrast
-      final Color numberColor = useCosmicStyle 
-          ? const Color(0xFF1A1A2E).withOpacity(0.8) // Deep blue for contrast
-          : Colors.white;
+      // Dark text for contrast against bright matte shapes
+      final Color numberColor = const Color(0xFF1A1A2E).withOpacity(0.9);
       numberWidget = Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: useCosmicStyle 
-              ? BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(4),
-                )
-              : null,
+          decoration: null,
           child: Text(
             numberId.toString(),
             style: TextStyle(
               fontSize: 18, 
               fontWeight: FontWeight.bold, 
               color: numberColor,
-              shadows: useCosmicStyle 
-                  ? [] 
-                  : [const Shadow(blurRadius: 2, color: Colors.black)],
+              shadows: [],
             ),
           ),
         ),
@@ -2753,9 +2740,6 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     final int? colorId = cell.colorId;
     final int? numberId = cell.numberId;
 
-    // Check if Medium or Hard mode - use cosmic style
-    final bool useCosmicStyle = (widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && 
-                                widget.gameMode != GameMode.numbers;
     
     final Color shapeColor = colorId != null 
         ? _getColorForValue(colorId)
@@ -2765,9 +2749,7 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     if (shapeId != null) {
       shapeWidget = Padding(
         padding: const EdgeInsets.all(4),
-        child: useCosmicStyle
-            ? CosmicGlyph(shapeId: shapeId, color: shapeColor)
-            : SudokuShape(id: shapeId, color: shapeColor), 
+        child: SudokuShape(id: shapeId, color: shapeColor),
       );
     } else if (colorId != null) {
        shapeWidget = Container(
@@ -2782,28 +2764,19 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
 
     Widget? numberWidget;
     if (numberId != null) {
-      // For cosmic style, use semi-transparent black or deep blue for contrast
-      final Color numberColor = useCosmicStyle 
-          ? const Color(0xFF1A1A2E).withOpacity(0.8) // Deep blue for contrast
-          : Colors.white;
+      // Dark text for contrast against bright matte shapes
+      final Color numberColor = const Color(0xFF1A1A2E).withOpacity(0.9);
       numberWidget = Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: useCosmicStyle 
-              ? BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(4),
-                )
-              : null,
+          decoration: null,
           child: Text(
             numberId.toString(),
             style: TextStyle(
               fontSize: 18, 
               fontWeight: FontWeight.bold, 
               color: numberColor,
-              shadows: useCosmicStyle 
-                  ? [] 
-                  : [const Shadow(blurRadius: 2, color: Colors.black)],
+              shadows: [],
             ),
           ),
         ),
@@ -2818,228 +2791,7 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
   }
 }
 
-class CosmicGlyphPainter extends CustomPainter {
-  const CosmicGlyphPainter({required this.shapeId, required this.color});
-  
-  final int shapeId;
-  final Color color;
-  
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double minSide = math.min(size.width, size.height);
-    final Rect bounds = Rect.fromCenter(
-      center: size.center(Offset.zero),
-      width: minSide,
-      height: minSide,
-    );
-    
-    final Offset center = bounds.center;
-    final double radius = minSide / 2;
-    
-    // Create glow effect paint
-    final Paint glowPaint = Paint()
-      ..color = color.withOpacity(0.5)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8.0)
-      ..style = PaintingStyle.fill;
-    
-    // Create gradient fill paint
-    final Paint fillPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..isAntiAlias = true;
-    
-    // Radial gradient: white center → color mid → color edge
-    fillPaint.shader = RadialGradient(
-      center: Alignment.topCenter,
-      colors: [Colors.white, color, color],
-      stops: const [0.0, 0.3, 1.0],
-    ).createShader(bounds);
-    
-    // Draw shape based on shapeId (1-9)
-    switch (shapeId) {
-      case 1: _drawOrb(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 2: _drawHalo(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 3: _drawPrism(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 4: _drawPolaris(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 5: _drawNova(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 6: _drawCrescent(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 7: _drawCapsule(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 8: _drawHex(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      case 9: _drawSector(canvas, bounds, center, radius, glowPaint, fillPaint); break;
-      default: _drawOrb(canvas, bounds, center, radius, glowPaint, fillPaint);
-    }
-  }
-  
-  void _drawOrb(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    final double orbRadius = radius * 0.4;
-    // Draw glow
-    canvas.drawCircle(center, orbRadius, glowPaint);
-    // Draw orb with gradient
-    canvas.drawCircle(center, orbRadius, fillPaint);
-    // Add shine highlight (small white circle at top-left)
-    final Paint shinePaint = Paint()..color = Colors.white.withOpacity(0.6);
-    canvas.drawCircle(center + Offset(-orbRadius * 0.3, -orbRadius * 0.3), orbRadius * 0.2, shinePaint);
-  }
-  
-  void _drawHalo(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    final double outerRadius = radius * 0.45;
-    final double innerRadius = radius * 0.25;
-    // Draw glow
-    canvas.drawCircle(center, outerRadius, glowPaint);
-    // Draw donut using path difference
-    final Path outerPath = Path()..addOval(Rect.fromCircle(center: center, radius: outerRadius));
-    final Path innerPath = Path()..addOval(Rect.fromCircle(center: center, radius: innerRadius));
-    final Path donutPath = Path.combine(PathOperation.difference, outerPath, innerPath);
-    canvas.drawPath(donutPath, fillPaint);
-  }
-  
-  void _drawPrism(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    final double padding = radius * 0.15;
-    final Path path = Path()
-      ..moveTo(center.dx, bounds.top + padding)
-      ..lineTo(bounds.right - padding, bounds.bottom - padding)
-      ..lineTo(bounds.left + padding, bounds.bottom - padding)
-      ..close();
-    // Draw glow
-    canvas.drawPath(path, glowPaint);
-    // Draw prism
-    canvas.drawPath(path, fillPaint);
-  }
-  
-  void _drawPolaris(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // 4-pointed concave star (diamond with concave sides)
-    final double size = radius * 0.4;
-    final Path path = Path()
-      ..moveTo(center.dx, center.dy - size) // Top
-      ..lineTo(center.dx + size * 0.6, center.dy) // Right (concave)
-      ..lineTo(center.dx, center.dy + size) // Bottom
-      ..lineTo(center.dx - size * 0.6, center.dy) // Left (concave)
-      ..close();
-    // Draw glow
-    canvas.drawPath(path, glowPaint);
-    // Draw star
-    canvas.drawPath(path, fillPaint);
-  }
-  
-  void _drawNova(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // 5-pointed star with rounded tips
-    final double outerRadius = radius * 0.4;
-    final double innerRadius = radius * 0.15;
-    final int points = 5;
-    final double step = math.pi / points;
-    
-    final Path path = Path();
-    double angle = -math.pi / 2; // Start at top
-    for (int i = 0; i < points * 2; i++) {
-      final double r = (i % 2 == 0) ? outerRadius : innerRadius;
-      final double x = center.dx + math.cos(angle) * r;
-      final double y = center.dy + math.sin(angle) * r;
-      if (i == 0) path.moveTo(x, y);
-      else path.lineTo(x, y);
-      angle += step;
-    }
-    path.close();
-    // Draw glow
-    canvas.drawPath(path, glowPaint);
-    // Draw star
-    canvas.drawPath(path, fillPaint);
-  }
-  
-  void _drawCrescent(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // Thick moon shape (two overlapping circles)
-    final double moonRadius = radius * 0.4;
-    final Offset leftCenter = center + Offset(-moonRadius * 0.3, 0);
-    final Offset rightCenter = center + Offset(moonRadius * 0.3, 0);
-    
-    final Path outerPath = Path()..addOval(Rect.fromCircle(center: leftCenter, radius: moonRadius));
-    final Path innerPath = Path()..addOval(Rect.fromCircle(center: rightCenter, radius: moonRadius * 0.7));
-    final Path crescentPath = Path.combine(PathOperation.difference, outerPath, innerPath);
-    // Draw glow
-    canvas.drawPath(crescentPath, glowPaint);
-    // Draw crescent
-    canvas.drawPath(crescentPath, fillPaint);
-  }
-  
-  void _drawCapsule(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // Vertical pill shape (rounded rectangle)
-    final double width = radius * 0.5;
-    final double height = radius * 0.8;
-    final RRect capsule = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: width, height: height),
-      Radius.circular(width / 2),
-    );
-    // Draw glow
-    canvas.drawRRect(capsule, glowPaint);
-    // Draw capsule
-    canvas.drawRRect(capsule, fillPaint);
-  }
-  
-  void _drawHex(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // Hexagon with pointy top
-    final double hexRadius = radius * 0.4;
-    final int sides = 6;
-    
-    final Path path = Path();
-    for (int i = 0; i < sides; i++) {
-      final double angle = -math.pi / 2 + (i * 2 * math.pi / sides); // Start at top
-      final double x = center.dx + math.cos(angle) * hexRadius;
-      final double y = center.dy + math.sin(angle) * hexRadius;
-      if (i == 0) path.moveTo(x, y);
-      else path.lineTo(x, y);
-    }
-    path.close();
-    // Draw glow
-    canvas.drawPath(path, glowPaint);
-    // Draw hexagon
-    canvas.drawPath(path, fillPaint);
-  }
-  
-  void _drawSector(Canvas canvas, Rect bounds, Offset center, double radius, Paint glowPaint, Paint fillPaint) {
-    // Thick cross/plus with rounded ends
-    final double thickness = radius * 0.2;
-    final double length = radius * 0.6;
-    
-    // Vertical bar
-    final RRect verticalBar = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: thickness, height: length),
-      Radius.circular(thickness / 2),
-    );
-    // Horizontal bar
-    final RRect horizontalBar = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: length, height: thickness),
-      Radius.circular(thickness / 2),
-    );
-    // Draw glow
-    canvas.drawRRect(verticalBar, glowPaint);
-    canvas.drawRRect(horizontalBar, glowPaint);
-    // Draw cross
-    canvas.drawRRect(verticalBar, fillPaint);
-    canvas.drawRRect(horizontalBar, fillPaint);
-  }
-  
-  @override
-  bool shouldRepaint(covariant CosmicGlyphPainter oldDelegate) {
-    return oldDelegate.shapeId != shapeId || oldDelegate.color != color;
-  }
-}
 
-/// Widget wrapper for CosmicGlyphPainter
-class CosmicGlyph extends StatelessWidget {
-  const CosmicGlyph({super.key, required this.shapeId, required this.color});
-  
-  final int shapeId;
-  final Color color;
-  
-  @override
-  Widget build(BuildContext context) {
-    return AspectRatio(
-      aspectRatio: 1,
-      child: CustomPaint(
-        painter: CosmicGlyphPainter(shapeId: shapeId, color: color),
-        isComplex: true,
-      ),
-    );
-  }
-}
 
 class PlanetPainter extends CustomPainter {
   final int planetId;
@@ -3448,6 +3200,8 @@ class _ShapePickerButton extends StatelessWidget {
        content = Center(child: Text(value.toString(), style: TextStyle(color: shapeColor, fontWeight: FontWeight.bold, fontSize: 20)));
     } else if (gameMode == GameMode.planets) {
        content = CustomPaint(painter: PlanetPainter(value), size: const Size(24,24));
+    } else if (gameMode == GameMode.cosmic) {
+       content = CustomPaint(painter: CosmicPainter(value), size: const Size(24, 24));
     } else if (gameMode == GameMode.custom) {
        content = FutureBuilder<List<String?>>(
          future: CustomImageRepository.loadCustomImages(),
