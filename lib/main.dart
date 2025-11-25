@@ -834,7 +834,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late SudokuPuzzle? _sudokuPuzzle;
   CombinedPuzzle? _combinedPuzzle;
   
-  // Hard Combined Draft
+  // Medium Combined Draft
   CombinedCell? _draftCell; 
   
   int? _selectedRow;
@@ -848,7 +848,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late AnimationController _completionController;
   late AnimationController _groupCompletionController;
   
-  // GlobalKey for board container
+  // GlobalKey for board container to calculate column positions
   final GlobalKey _boardKey = GlobalKey();
   
   late int _gridSize;
@@ -906,13 +906,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         setState(() {
           _elapsed = (widget.initialState?.elapsedSeconds ?? 0) + _stopwatch.elapsed.inSeconds;
         });
-        _saveGameState();
+        if (widget.difficulty != Difficulty.hard) _saveGameState();
       }
     });
   }
 
   void _initializeGridSize() {
-    // Easy: 6x6 grid, Medium/Hard: 9x9 grid
+    // Easy: 6x6, Medium/Hard: 9x9
     if (widget.difficulty == Difficulty.easy) {
       _gridSize = 6;
       _blockRows = 2;
@@ -943,7 +943,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _generateLevelLogic() {
-    // Hard mode: Use CombinedPuzzleGenerator for shapes/colors modes (combined puzzles)
+    // Hard mode uses CombinedPuzzleGenerator for shapes/colors modes
     if (widget.difficulty == Difficulty.hard && 
         widget.mode != GameMode.numbers && 
         widget.mode != GameMode.planets &&
@@ -969,28 +969,15 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
          for (int c = 0; c < _gridSize; c++) {
             final cell = _combinedPuzzle!.initialBoard[r][c];
             bool isFixed = cell.isFixed;
-            // Check if the selected element is present in this cell
-            bool hasSelectedElement = false;
-            switch (_combinedPuzzle!.selectedElement) {
-              case ElementType.shape:
-                hasSelectedElement = cell.shapeId != null;
-                break;
-              case ElementType.color:
-                hasSelectedElement = cell.colorId != null;
-                break;
-              case ElementType.number:
-                hasSelectedElement = cell.numberId != null;
-                break;
-            }
-            if (widget.initialState == null) {
-              _board[r][c] = hasSelectedElement ? 1 : 0; // Mark as filled if selected element is present
-            }
-            _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
+               if (widget.initialState == null) {
+                  _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
+               }
+               _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
          }
        }
        _sudokuPuzzle = null;
     } else {
-       // Easy/Medium: Use LevelGenerator for all modes (Medium is same as Easy but 9x9)
+       // Easy and Medium modes use LevelGenerator for all modes
        // For Easy mode: route odd levels to planets, even levels to cosmic
        int modeIndex = widget.mode.index;
        if (widget.difficulty == Difficulty.easy && 
@@ -1021,6 +1008,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _saveGameState() async {
+    // Skip save for Hard mode (arcade style)
+    if (widget.difficulty == Difficulty.hard) return;
     
     final state = GameStateData(
       mode: widget.mode,
@@ -1042,6 +1031,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     super.dispose();
   }
   void _selectCell(int row, int col) {
+    // Hard mode uses drag-and-drop for falling objects, not tap-based selection
     setState(() {
       // Reset draft if changing cells
       if (_selectedRow != row || _selectedCol != col) {
@@ -1052,7 +1042,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       if (_activeHint != null) _activeHint = null;
     });
   }
-
   void _pushHistory() {
     // No history/undo for Hard mode
     if (widget.difficulty == Difficulty.hard) return;
@@ -1083,11 +1072,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
     _pushHistory();
 
-    // Hard (Combined) Logic
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+    // Medium (Combined) Logic
+    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
        if (type == null) return;
        
-       // Pencil Mode for Hard - type is determined by which input row was clicked
+       // Pencil Mode for Medium - type is determined by which input row was clicked
        if (_pencilMode) {
          setState(() {
            switch(type) {
@@ -1244,8 +1233,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     for(int r=0; r<_gridSize; r++) {
       for(int c=0; c<_gridSize; c++) {
         if (_board[r][c] == 0) return false; 
-        // Hard mode uses combined puzzles with different validation, Easy/Medium use standard validation
-        if (_board[r][c] != 0 && widget.difficulty != Difficulty.hard && _board[r][c] != _getCorrectValue(r, c)) return false;
+        if (_board[r][c] != 0 && widget.difficulty != Difficulty.medium && widget.difficulty != Difficulty.hard && _board[r][c] != _getCorrectValue(r, c)) return false;
       }
     }
     return true;
@@ -1317,7 +1305,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _pushHistory();
     setState(() {
       _board[_selectedRow!][_selectedCol!] = 0;
-      if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+      if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
          _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
          _combinedPuzzle!.initialBoard[_selectedRow!][_selectedCol!] = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
          // Clear all notes
@@ -1528,6 +1516,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       ),
     );
   }
+  
 
   Widget _buildTools(BuildContext context) {
     return Padding(
@@ -1594,7 +1583,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           
                           CombinedCell? combinedCell;
                           if (_combinedPuzzle != null) {
-                            // For Hard mode, show initialBoard for prefilled cells, solution for user-filled cells
+                            // For hard mode, show initialBoard for prefilled cells, solution for user-filled cells
                             if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
                               if (value > 0) {
                                 // Check if it's a prefilled cell (fixed) or user-filled
@@ -1618,10 +1607,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           Widget cellWidget = _SudokuCell(
                                 value: value,
                                 notes: _notes[row][col],
-                                shapeNotes: const {},
-                                colorNotes: const {},
-                                numberNotes: const {},
-                                draftCell: null,
+                                shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
+                                colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
+                                numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
+                                draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
                                 row: row,
                                 col: col,
                                 gridSize: _gridSize,
@@ -1633,7 +1622,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                                 gameMode: widget.mode,
                                 difficulty: widget.difficulty,
                                 combinedCell: combinedCell,
-                                selectedElement: _combinedPuzzle?.selectedElement, 
+                                selectedElement: null, 
                                 shapeId: _shapeMap[value > 0 ? value - 1 : 0],
                                 shapeMap: _shapeMap, 
                                 onTap: () => _selectCell(row, col),
@@ -1671,7 +1660,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
     if (row == selRow && col == selCol) return CellHighlight.selected;
 
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
        if (row == selRow || col == selCol || _sharesBlock(row, col, selRow, selCol)) return CellHighlight.related;
        return CellHighlight.none;
     }
@@ -1695,55 +1684,19 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
   
   Widget _buildInputBar(BuildContext context) {
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
-       final ElementType? selectedElement = _combinedPuzzle?.selectedElement;
-       String solveByText = "Solve by: ";
-       if (selectedElement != null) {
-         switch (selectedElement) {
-           case ElementType.shape:
-             solveByText += "SHAPES";
-             break;
-           case ElementType.color:
-             solveByText += "COLORS";
-             break;
-           case ElementType.number:
-             solveByText += "NUMBERS";
-             break;
-         }
-       }
-       
+    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
        return Container(
-         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+         height: 160,
+         padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
          decoration: BoxDecoration(color: kRetroSurface, border: Border(top: BorderSide(color: kRetroAccent, width: 4))),
          child: Column(
            mainAxisSize: MainAxisSize.min,
            children: [
-             if (selectedElement != null)
-               Padding(
-                 padding: const EdgeInsets.symmetric(vertical: 4),
-                 child: Text(
-                   solveByText,
-                   style: TextStyle(
-                     fontSize: 14,
-                     fontWeight: FontWeight.bold,
-                     color: kRetroHighlight,
-                   ),
-                 ),
-               ),
-             Container(
-               height: 160,
-               padding: const EdgeInsets.fromLTRB(0, 2, 0, 4),
-               child: Column(
-                 mainAxisSize: MainAxisSize.min,
-                 children: [
-                   _buildInputRow(ElementType.number),
-                   const SizedBox(height: 1),
-                   _buildInputRow(ElementType.color),
-                   const SizedBox(height: 1),
-                   _buildInputRow(ElementType.shape),
-                 ],
-               ),
-             ),
+             _buildInputRow(ElementType.number),
+             const SizedBox(height: 1),
+             _buildInputRow(ElementType.color),
+             const SizedBox(height: 1),
+             _buildInputRow(ElementType.shape),
            ],
          ),
        );
@@ -2034,8 +1987,8 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
   }
 
   Widget _buildCellContainer(Color bgColor, Color contentColor) {
-    // Hard mode: Show draft cell if selected, or show separate notes
-    if (widget.difficulty == Difficulty.hard && widget.gameMode != GameMode.numbers) {
+    // Medium mode: Show draft cell if selected, or show separate notes
+    if (widget.difficulty == Difficulty.medium && widget.gameMode != GameMode.numbers) {
       Widget content;
       
       // Priority: Draft cell (if selected) > Filled cell > Notes > Empty
@@ -2665,63 +2618,6 @@ class CosmicPainter extends CustomPainter {
   
   @override
   bool shouldRepaint(covariant CosmicPainter oldDelegate) => oldDelegate.cosmicId != cosmicId;
-}
-
-class SpaceshipPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint shipPaint = Paint()
-      ..color = kRetroAccent
-      ..style = PaintingStyle.fill;
-    
-    final Paint glowPaint = Paint()
-      ..color = kRetroHighlight.withOpacity(0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    
-    final Paint windowPaint = Paint()
-      ..color = Colors.cyanAccent
-      ..style = PaintingStyle.fill;
-    
-    final double centerX = size.width / 2;
-    final double centerY = size.height / 2;
-    
-    // Draw spaceship body (triangular/arrow shape)
-    final Path shipPath = Path()
-      ..moveTo(centerX, size.height * 0.1) // Top point
-      ..lineTo(size.width * 0.2, size.height * 0.7) // Left bottom
-      ..lineTo(size.width * 0.35, size.height * 0.9) // Left wing
-      ..lineTo(centerX, size.height * 0.85) // Center bottom
-      ..lineTo(size.width * 0.65, size.height * 0.9) // Right wing
-      ..lineTo(size.width * 0.8, size.height * 0.7) // Right bottom
-      ..close();
-    
-    // Draw glow
-    canvas.drawPath(shipPath, glowPaint);
-    
-    // Draw ship body
-    canvas.drawPath(shipPath, shipPaint);
-    
-    // Draw windows
-    canvas.drawCircle(Offset(centerX - size.width * 0.15, centerY), 8, windowPaint);
-    canvas.drawCircle(Offset(centerX, centerY), 10, windowPaint);
-    canvas.drawCircle(Offset(centerX + size.width * 0.15, centerY), 8, windowPaint);
-    
-    // Draw details
-    final Paint detailPaint = Paint()
-      ..color = kRetroHighlight
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    
-    // Draw lines on ship
-    canvas.drawLine(
-      Offset(size.width * 0.3, size.height * 0.5),
-      Offset(size.width * 0.7, size.height * 0.5),
-      detailPaint,
-    );
-  }
-  
-  @override
-  bool shouldRepaint(covariant SpaceshipPainter oldDelegate) => false;
 }
 
 class _ShapePickerButton extends StatelessWidget {
