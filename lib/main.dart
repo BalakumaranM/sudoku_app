@@ -969,10 +969,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
          for (int c = 0; c < _gridSize; c++) {
             final cell = _combinedPuzzle!.initialBoard[r][c];
             bool isFixed = cell.isFixed;
-            if (widget.initialState == null) {
-              _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
-            }
-            _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
+               if (widget.initialState == null) {
+                  _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
+               }
+               _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
          }
        }
        _sudokuPuzzle = null;
@@ -1072,8 +1072,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
     _pushHistory();
 
-    // Medium (Combined) Logic
-    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
+    // Medium and Hard (Combined) Logic
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers) {
        if (type == null) return;
        
        // Pencil Mode for Medium - type is determined by which input row was clicked
@@ -1305,7 +1305,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _pushHistory();
     setState(() {
       _board[_selectedRow!][_selectedCol!] = 0;
-      if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
+      if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers) {
          _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
          _combinedPuzzle!.initialBoard[_selectedRow!][_selectedCol!] = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
          // Clear all notes
@@ -1604,13 +1604,14 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           
                           final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
                           final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
+                          final bool isCombinedMode = (widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers;
                           Widget cellWidget = _SudokuCell(
                                 value: value,
                                 notes: _notes[row][col],
-                                shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
-                                colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
-                                numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
-                                draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
+                                shapeNotes: isCombinedMode ? _shapeNotes[row][col] : const {},
+                                colorNotes: isCombinedMode ? _colorNotes[row][col] : const {},
+                                numberNotes: isCombinedMode ? _numberNotes[row][col] : const {},
+                                draftCell: isCombinedMode && isSelected ? _draftCell : null,
                                 row: row,
                                 col: col,
                                 gridSize: _gridSize,
@@ -1660,7 +1661,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
     if (row == selRow && col == selCol) return CellHighlight.selected;
 
-    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers) {
        if (row == selRow || col == selCol || _sharesBlock(row, col, selRow, selCol)) return CellHighlight.related;
        return CellHighlight.none;
     }
@@ -1684,7 +1685,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
   
   Widget _buildInputBar(BuildContext context) {
-    if (widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers) {
+    // Medium and Hard modes use combined puzzles, so show all three input types
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers) {
        return Container(
          height: 160,
          padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
@@ -1987,8 +1989,8 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
   }
 
   Widget _buildCellContainer(Color bgColor, Color contentColor) {
-    // Medium mode: Show draft cell if selected, or show separate notes
-    if (widget.difficulty == Difficulty.medium && widget.gameMode != GameMode.numbers) {
+    // Medium and Hard modes: Show draft cell if selected, or show separate notes
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.gameMode != GameMode.numbers) {
       Widget content;
       
       // Priority: Draft cell (if selected) > Filled cell > Notes > Empty
