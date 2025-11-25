@@ -910,7 +910,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       }
     });
   }
-  
+
   void _initializeGridSize() {
     // Easy: 6x6 grid, Medium/Hard: 9x9 grid
     if (widget.difficulty == Difficulty.easy) {
@@ -943,8 +943,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _generateLevelLogic() {
-    // Hard mode: Use CombinedPuzzleGenerator for shapes/colors modes (combined puzzles)
-    if (widget.difficulty == Difficulty.hard && 
+    // Medium/Hard mode: Use CombinedPuzzleGenerator for shapes/colors modes (combined puzzles)
+    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && 
         widget.mode != GameMode.numbers && 
         widget.mode != GameMode.planets &&
         widget.mode != GameMode.custom &&
@@ -969,15 +969,28 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
          for (int c = 0; c < _gridSize; c++) {
             final cell = _combinedPuzzle!.initialBoard[r][c];
             bool isFixed = cell.isFixed;
+            // Check if the selected element is present in this cell
+            bool hasSelectedElement = false;
+            switch (_combinedPuzzle!.selectedElement) {
+              case ElementType.shape:
+                hasSelectedElement = cell.shapeId != null;
+                break;
+              case ElementType.color:
+                hasSelectedElement = cell.colorId != null;
+                break;
+              case ElementType.number:
+                hasSelectedElement = cell.numberId != null;
+                break;
+            }
             if (widget.initialState == null) {
-              _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
+              _board[r][c] = hasSelectedElement ? 1 : 0; // Mark as filled if selected element is present
             }
             _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
          }
        }
        _sudokuPuzzle = null;
     } else {
-       // Easy/Medium: Use LevelGenerator for all modes
+       // Easy: Use LevelGenerator for all modes
        // For Easy mode: route odd levels to planets, even levels to cosmic
        int modeIndex = widget.mode.index;
        if (widget.difficulty == Difficulty.easy && 
@@ -1039,7 +1052,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       if (_activeHint != null) _activeHint = null;
     });
   }
-  
+
   void _pushHistory() {
     // No history/undo for Hard mode
     if (widget.difficulty == Difficulty.hard) return;
@@ -1465,12 +1478,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                       child: _buildBoard(context),
                     ),
                   ),
-                  _buildTools(context),
-                  if (_activeHint == null) _buildInputBar(context),
-                  if (_activeHint != null) Container(height: 120),
+                     _buildTools(context),
+                     if (_activeHint == null) _buildInputBar(context),
+                     if (_activeHint != null) Container(height: 120),
                 ],
               ),
-            ),
+              ),
             IgnorePointer(
               child: AnimatedBuilder(
                 animation: _completionController,
@@ -1514,7 +1527,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       ),
     );
   }
-  
+
   Widget _buildTools(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1580,8 +1593,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           
                           CombinedCell? combinedCell;
                           if (_combinedPuzzle != null) {
-                            // For hard mode, show initialBoard for prefilled cells, solution for user-filled cells
-                            if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
+                            // For Medium/Hard mode, show initialBoard for prefilled cells, solution for user-filled cells
+                            if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && widget.mode != GameMode.numbers) {
                               if (value > 0) {
                                 // Check if it's a prefilled cell (fixed) or user-filled
                                 if (!_isEditable[row][col]) {
@@ -1602,27 +1615,27 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                           final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
                           final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
                           Widget cellWidget = _SudokuCell(
-                            value: value,
-                            notes: _notes[row][col],
-                            shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
-                            colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
-                            numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
-                            draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
-                            row: row,
-                            col: col,
-                            gridSize: _gridSize,
-                            isEditable: isEditable,
-                            isSelected: isSelected,
-                            isInvalid: isInvalid,
-                            highlight: highlight,
-                            isAnimated: isAnimated,
-                            gameMode: widget.mode,
-                            difficulty: widget.difficulty,
-                            combinedCell: combinedCell,
-                            selectedElement: null, 
-                            shapeId: _shapeMap[value > 0 ? value - 1 : 0],
-                            shapeMap: _shapeMap, 
-                            onTap: () => _selectCell(row, col),
+                                value: value,
+                                notes: _notes[row][col],
+                                shapeNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _shapeNotes[row][col] : const {},
+                                colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
+                                numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
+                                draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
+                                row: row,
+                                col: col,
+                                gridSize: _gridSize,
+                                isEditable: isEditable,
+                                isSelected: isSelected,
+                                isInvalid: isInvalid,
+                                highlight: highlight,
+                                isAnimated: isAnimated,
+                                gameMode: widget.mode,
+                                difficulty: widget.difficulty,
+                                combinedCell: combinedCell,
+                                selectedElement: _combinedPuzzle?.selectedElement, 
+                                shapeId: _shapeMap[value > 0 ? value - 1 : 0],
+                                shapeMap: _shapeMap, 
+                                onTap: () => _selectCell(row, col),
                           );
 
                           // Wrap in container with border
@@ -2025,9 +2038,9 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     // Standard mode
     Widget content;
     if (widget.value > 0 || (widget.combinedCell != null && (widget.combinedCell!.shapeId != null || widget.combinedCell!.colorId != null || widget.combinedCell!.numberId != null))) {
-       content = (widget.combinedCell != null)
-             ? _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor)
-             : _buildSingleElement(context, contentColor);
+          content = (widget.combinedCell != null)
+                ? _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor)
+                : _buildSingleElement(context, contentColor);
     } else if (widget.notes.isNotEmpty) {
        content = _buildNotes();
     } else {
