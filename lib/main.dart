@@ -105,35 +105,19 @@ const Color kRetroHint = Color(0xFF00FF55); // Green for Hint
 
 Color _getColorForValue(int value) {
   switch (value) {
-    case 1: return const Color(0xFFFF0055); // Red
-    case 2: return const Color(0xFF00FF55); // Green
-    case 3: return const Color(0xFF5500FF); // Blue
-    case 4: return const Color(0xFFFFFF00); // Yellow
-    case 5: return const Color(0xFF00FFFF); // Cyan
-    case 6: return const Color(0xFFFF9900); // Orange
-    case 7: return const Color(0xFF9D00FF); // Purple
-    case 8: return const Color(0xFFFF00CC); // Pink
-    case 9: return const Color(0xFF00FFCC); // Teal
+    case 1: return const Color(0xFFFF6B6B); // Coral Red
+    case 2: return const Color(0xFF6BCB77); // Mint Green
+    case 3: return const Color(0xFF4D96FF); // Royal Blue
+    case 4: return const Color(0xFFFFD93D); // Sunny Yellow
+    case 5: return const Color(0xFF9D4EDD); // Deep Purple
+    case 6: return const Color(0xFFFF9F43); // Carrot Orange
+    case 7: return const Color(0xFF48DBFB); // Sky Cyan
+    case 8: return const Color(0xFFFF9FF3); // Bubblegum Pink
+    case 9: return const Color(0xFF8395A7); // Slate Grey
     default: return Colors.grey;
   }
 }
 
-/// Returns high-luminance pastel colors for holographic sci-fi UI
-/// Designed for dark blue background (0xFF1A1A2E) to prevent eye strain
-Color getCosmicColor(int index) {
-  switch (index) {
-    case 1: return const Color(0xFFFF80AB); // Pink
-    case 2: return const Color(0xFF80DEEA); // Cyan
-    case 3: return const Color(0xFFFFD54F); // Gold
-    case 4: return const Color(0xFFFFAB91); // Orange
-    case 5: return const Color(0xFFB9F6CA); // Mint
-    case 6: return const Color(0xFFD1C4E9); // Lavender
-    case 7: return const Color(0xFF64B5F6); // Blue
-    case 8: return const Color(0xFFE0E0E0); // Silver
-    case 9: return const Color(0xFFEF9A9A); // Soft Red
-    default: return const Color(0xFFE0E0E0); // Default to Silver
-  }
-}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1862,7 +1846,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     final bool useCosmicStyle = widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers;
     
     final Color shapeColor = colorId != null 
-        ? (useCosmicStyle ? getCosmicColor(colorId) : _getColorForValue(colorId))
+        ? _getColorForValue(colorId)
         : defaultColor.withOpacity(0.2);
     
     Widget? shapeWidget;
@@ -2774,7 +2758,7 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
                                 widget.gameMode != GameMode.numbers;
     
     final Color shapeColor = colorId != null 
-        ? (useCosmicStyle ? getCosmicColor(colorId) : _getColorForValue(colorId))
+        ? _getColorForValue(colorId)
         : defaultColor.withOpacity(0.2);
     
     Widget? shapeWidget;
