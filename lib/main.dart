@@ -36,31 +36,6 @@ class HintInfo {
 }
 
 
-class FallingObject {
-  String id;
-  int col;
-  double y; // 0.0 to 1.0 (relative to screen height, 0.0 = top, 1.0 = bottom)
-  int shapeId;
-  int colorId;
-  int numberId;
-  double rotationAngle; // Current rotation angle
-  double rotationSpeed; // Rotation speed multiplier (0.8-1.5)
-  double rotationPhase; // Phase offset for unique starting rotation (0-2π)
-  bool isBeingDragged; // Whether this object is currently being dragged
-  FallingObject({
-    required this.id, 
-    required this.col, 
-    required this.y, 
-    required this.shapeId, 
-    required this.colorId, 
-    required this.numberId, 
-    this.rotationAngle = 0.0,
-    required this.rotationSpeed,
-    required this.rotationPhase,
-    this.isBeingDragged = false,
-  });
-}
-
 // Retro Pixel Palette
 const Color kRetroBackground = Color(0xFF1A1A2E); // Deep Navy
 const Color kRetroSurface = Color(0xFF16213E); // Dark Blue
@@ -873,17 +848,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late AnimationController _completionController;
   late AnimationController _groupCompletionController;
   
-  // Hard Mode Falling
-  late Ticker _fallingTicker;
-  final List<FallingObject> _fallingObjects = [];
-  double _lastSpawnTime = 0;
-  
-  // GlobalKey for board container to calculate column positions
+  // GlobalKey for board container
   final GlobalKey _boardKey = GlobalKey();
-  
-  // Pre-calculated rotation parameters for each cell (avoids creating Random on every frame)
-  late List<double> _cellRotationSpeeds;
-  late List<double> _cellRotationPhases;
   
   late int _gridSize;
   late int _blockRows;
@@ -919,17 +885,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    
-    // Start falling ticker only for Hard mode with shapes/colors (modes that use combined puzzles)
-    final bool useCombinedPuzzle = widget.difficulty == Difficulty.hard && 
-        widget.mode != GameMode.numbers &&
-        widget.mode != GameMode.planets &&
-        widget.mode != GameMode.custom &&
-        widget.mode != GameMode.cosmic;
-    if (useCombinedPuzzle) {
-      _fallingTicker = createTicker(_onFallingTick);
-      _fallingTicker.start();
-    }
 
     final allShapes = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     if (_gridSize == 6) {
@@ -938,17 +893,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     } else {
       _shapeMap = allShapes;
     }
-
-    // Pre-calculate rotation parameters for all cells (avoids per-frame Random creation)
-    final int totalCells = _gridSize * _gridSize;
-    _cellRotationSpeeds = List.generate(totalCells, (i) {
-      final rnd = math.Random(i);
-      return 0.7 + (rnd.nextDouble() * 0.7); // 0.7x to 1.4x
-    });
-    _cellRotationPhases = List.generate(totalCells, (i) {
-      final rnd = math.Random(i + 1000); // Different seed
-      return rnd.nextDouble() * 2 * math.pi; // 0 to 2π
-    });
 
     _initializeGame();
     
@@ -962,99 +906,21 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         setState(() {
           _elapsed = (widget.initialState?.elapsedSeconds ?? 0) + _stopwatch.elapsed.inSeconds;
         });
-        if (widget.difficulty != Difficulty.hard) _saveGameState();
+        _saveGameState();
       }
     });
   }
   
-  void _onFallingTick(Duration elapsed) {
-    final double t = elapsed.inMilliseconds / 1000.0;
-    final double dt = t - _lastSpawnTime;
-    
-    // Move objects and rotate them with unique patterns for each object
-    setState(() {
-      for (var obj in _fallingObjects) {
-        // Skip vertical movement for objects being dragged
-        if (!obj.isBeingDragged) {
-          obj.y += 0.002; // Fall speed
-        }
-        
-        // Calculate rotation angle for this object using its unique speed and phase
-        // Base rotation from controller (0 to 2π, seamless loop)
-        final double baseRotation = _rotationController.value * 2 * math.pi;
-        // Apply unique speed and phase for this object
-        obj.rotationAngle = (baseRotation * obj.rotationSpeed + obj.rotationPhase);
-        // No modulo needed - Transform handles wrapping, and controller loops seamlessly
-      }
-      // Remove objects that have fallen past the board (y > 1.0 means past board bottom)
-      _fallingObjects.removeWhere((obj) => obj.y > 1.0);
-    });
-    
-    // Spawn logic - space out spawns per column
-    if (dt > 2.0) { // Spawn every 2s
-      _lastSpawnTime = t;
-      _spawnFallingObject();
-    }
-  }
-  
-  void _spawnFallingObject() {
-    final rnd = math.Random();
-    int col = rnd.nextInt(_gridSize);
-    
-    // Get needed objects for this column
-    List<CombinedCell> needed = [];
-    for(int r=0; r<_gridSize; r++) {
-      if (_board[r][col] == 0 && _combinedPuzzle != null) {
-        needed.add(_combinedPuzzle!.solution[r][col]);
-      }
-    }
-    
-    int shapeId, colorId, numberId;
-    
-    // 60% chance to spawn correct object, 40% random
-    if (needed.isNotEmpty && rnd.nextDouble() < 0.6) {
-      final correct = needed[rnd.nextInt(needed.length)];
-      shapeId = correct.shapeId!;
-      colorId = correct.colorId!;
-      numberId = correct.numberId!;
-    } else {
-      // Random object
-      shapeId = rnd.nextInt(_gridSize) + 1;
-      colorId = rnd.nextInt(_gridSize) + 1;
-      numberId = rnd.nextInt(_gridSize) + 1;
-    }
-    
-    setState(() {
-      // Rotation speed: 0.8x to 1.5x
-      final double speed = 0.8 + (rnd.nextDouble() * 0.7);
-      // Phase offset: 0 to 2π for unique starting rotation
-      final double phase = rnd.nextDouble() * 2 * math.pi;
-      
-      _fallingObjects.add(FallingObject(
-        id: DateTime.now().toString(),
-        col: col,
-        y: 0.0, // Start from top of screen (0.0 = top, 1.0 = bottom)
-        shapeId: shapeId,
-        colorId: colorId,
-        numberId: numberId,
-        rotationAngle: 0.0, // Will be calculated using rotation controller
-        rotationSpeed: speed,
-        rotationPhase: phase,
-      ));
-    });
-  }
-
   void _initializeGridSize() {
-    if (widget.mode == GameMode.numbers) {
-      _gridSize = widget.difficulty == Difficulty.easy ? 6 : 9;
+    // Easy: 6x6 grid, Medium/Hard: 9x9 grid
+    if (widget.difficulty == Difficulty.easy) {
+      _gridSize = 6;
+      _blockRows = 2;
+      _blockCols = 3;
     } else {
-      // Crazy Mode
       _gridSize = 9;
-    }
-    if (_gridSize == 6) {
-      _blockRows = 2; _blockCols = 3;
-    } else {
-      _blockRows = 3; _blockCols = 3;
+      _blockRows = 3;
+      _blockCols = 3;
     }
   }
 
@@ -1077,7 +943,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _generateLevelLogic() {
-    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard) && 
+    // Hard mode: Use CombinedPuzzleGenerator for shapes/colors modes (combined puzzles)
+    if (widget.difficulty == Difficulty.hard && 
         widget.mode != GameMode.numbers && 
         widget.mode != GameMode.planets &&
         widget.mode != GameMode.custom &&
@@ -1102,22 +969,15 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
          for (int c = 0; c < _gridSize; c++) {
             final cell = _combinedPuzzle!.initialBoard[r][c];
             bool isFixed = cell.isFixed;
-            // For hard mode, use fixed cells as prefilled (like other modes)
-            if (widget.difficulty == Difficulty.hard) {
-               if (widget.initialState == null) {
-                  _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
-               }
-               _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
-            } else {
-               if (widget.initialState == null) {
-                  _board[r][c] = isFixed ? 1 : 0;
-               }
-               _isEditable[r][c] = !isFixed;
+            if (widget.initialState == null) {
+              _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
             }
+            _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
          }
        }
        _sudokuPuzzle = null;
     } else {
+       // Easy/Medium: Use LevelGenerator for all modes
        // For Easy mode: route odd levels to planets, even levels to cosmic
        int modeIndex = widget.mode.index;
        if (widget.difficulty == Difficulty.easy && 
@@ -1148,8 +1008,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _saveGameState() async {
-    // Skip save for Hard mode (arcade style)
-    if (widget.difficulty == Difficulty.hard) return;
     
     final state = GameStateData(
       mode: widget.mode,
@@ -1168,19 +1026,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _rotationController.dispose();
     _completionController.dispose();
     _groupCompletionController.dispose();
-    // Dispose falling ticker only if it was created (same condition as init)
-    final bool useCombinedPuzzle = widget.difficulty == Difficulty.hard && 
-        widget.mode != GameMode.numbers &&
-        widget.mode != GameMode.planets &&
-        widget.mode != GameMode.custom &&
-        widget.mode != GameMode.cosmic;
-    if (useCombinedPuzzle) {
-      _fallingTicker.dispose();
-    }
     super.dispose();
   }
   void _selectCell(int row, int col) {
-    // Hard mode uses drag-and-drop for falling objects, not tap-based selection
     setState(() {
       // Reset draft if changing cells
       if (_selectedRow != row || _selectedCol != col) {
@@ -1192,46 +1040,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     });
   }
   
-  /// Handle placing a falling object into a cell
-  void _handleFallingObjectPlacement(FallingObject obj, int row, int col) {
-    if (!_isEditable[row][col] || _board[row][col] != 0) {
-      _handleMistake();
-      setState(() {
-        _fallingObjects.remove(obj);
-      });
-      return;
-    }
-    
-    // Safety check: combined puzzle must exist for hard mode placement
-    if (_combinedPuzzle == null) {
-      setState(() {
-        _fallingObjects.remove(obj);
-      });
-      return;
-    }
-    
-    // Check if the full object matches (shape, color, number)
-    final correctCell = _combinedPuzzle!.solution[row][col];
-    if (obj.shapeId == correctCell.shapeId && 
-        obj.colorId == correctCell.colorId && 
-        obj.numberId == correctCell.numberId) {
-      setState(() {
-        _board[row][col] = 1; // Mark filled
-        _combinedPuzzle!.initialBoard[row][col] = _combinedPuzzle!.solution[row][col];
-        
-        _fallingObjects.remove(obj);
-        _animatedCells.add(row * _gridSize + col);
-        
-        if (_isBoardSolved()) _onLevelComplete();
-      });
-    } else {
-      _handleMistake();
-      setState(() {
-        _fallingObjects.remove(obj);
-      });
-    }
-  }
-
   void _pushHistory() {
     // No history/undo for Hard mode
     if (widget.difficulty == Difficulty.hard) return;
@@ -1259,9 +1067,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   void _handleInput(int value, {ElementType? type}) {
     if (_selectedRow == null || _selectedCol == null) return;
     if (!_isEditable[_selectedRow!][_selectedCol!]) return;
-
-    // Hard mode handles input via falling objects
-    if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) return;
 
     _pushHistory();
 
@@ -1599,10 +1404,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final bool isHard = widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers;
-    // Only show falling objects UI if combined puzzle exists (shapes/colors modes)
-    final bool isHardWithFallingObjects = isHard && _combinedPuzzle != null;
-    
     return WillPopScope(
       onWillPop: () async {
         _stopwatch.stop();
@@ -1658,34 +1459,18 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                     padding: const EdgeInsets.all(8.0),
                     child: Text(_formatTime(_elapsed), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                   ),
-                  if (isHard) const Spacer(),
                   Expanded(
-                    flex: isHard ? 2 : 1,
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Stack(
-                        children: [
-                          if (isHardWithFallingObjects) _buildSpaceship(context),
-                          _buildBoard(context),
-                        ],
-                      ),
+                      child: _buildBoard(context),
                     ),
                   ),
-                  if (isHard) const Spacer(),
-                  if (!isHard) ...[
-                     _buildTools(context),
-                     if (_activeHint == null) _buildInputBar(context),
-                     if (_activeHint != null) Container(height: 120),
-                  ]
+                  _buildTools(context),
+                  if (_activeHint == null) _buildInputBar(context),
+                  if (_activeHint != null) Container(height: 120),
                 ],
               ),
             ),
-            // Falling objects overlay - covers entire Scaffold body (only for modes with combined puzzle)
-            if (isHardWithFallingObjects)
-              AnimatedBuilder(
-                animation: _rotationController,
-                builder: (context, child) => _buildFallingObjects(),
-              ),
             IgnorePointer(
               child: AnimatedBuilder(
                 animation: _completionController,
@@ -1730,184 +1515,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     );
   }
   
-  Widget _buildSpaceship(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final double boardLength = math.min(constraints.maxWidth, constraints.maxHeight);
-      final double spaceshipWidth = boardLength * 0.8;
-      final double spaceshipHeight = 80;
-      
-      // Use Align + Transform instead of Positioned (which requires direct Stack parent)
-      return Align(
-        alignment: Alignment.topCenter,
-        child: Transform.translate(
-          offset: Offset(0, -spaceshipHeight - 20),
-          child: SizedBox(
-            width: spaceshipWidth,
-            height: spaceshipHeight,
-            child: CustomPaint(
-              painter: SpaceshipPainter(),
-              size: Size(spaceshipWidth, spaceshipHeight),
-            ),
-          ),
-        ),
-      );
-    });
-  }
-
-  Widget _buildFallingCombinedElement(CombinedCell cell, Color defaultColor) {
-    final int? shapeId = cell.shapeId;
-    final int? colorId = cell.colorId;
-    final int? numberId = cell.numberId;
-
-    
-    final Color shapeColor = colorId != null 
-        ? _getColorForValue(colorId)
-        : defaultColor.withOpacity(0.2);
-    
-    Widget? shapeWidget;
-    if (shapeId != null) {
-      shapeWidget = Padding(
-        padding: const EdgeInsets.all(4),
-        child: SudokuShape(id: shapeId, color: shapeColor),
-      );
-    } else if (colorId != null) {
-       shapeWidget = Container(
-        margin: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: shapeColor,
-          boxShadow: [BoxShadow(color: shapeColor.withOpacity(0.6), blurRadius: 10, spreadRadius: 1)],
-          shape: BoxShape.circle,
-        ),
-      );
-    }
-
-    Widget? numberWidget;
-    if (numberId != null) {
-      // Dark text for contrast against bright matte shapes
-      final Color numberColor = const Color(0xFF1A1A2E).withOpacity(0.9);
-      numberWidget = Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: null,
-          child: Text(
-            numberId.toString(),
-            style: TextStyle(
-              fontSize: 18, 
-              fontWeight: FontWeight.bold, 
-              color: numberColor,
-              shadows: [],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      alignment: Alignment.center,
-      children: [if (shapeWidget != null) shapeWidget, if (numberWidget != null) numberWidget],
-    );
-  }
-
-  /// Calculate the X position for a falling object to align with a specific column
-  /// Uses the board's GlobalKey to get exact position and width
-  double? _calculateColumnX(int colIndex, double objectSize) {
-    final RenderBox? renderBox = _boardKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox == null) return null;
-    
-    // Get the board's global position and size
-    final Offset boardPosition = renderBox.localToGlobal(Offset.zero);
-    final double boardStartX = boardPosition.dx;
-    final double boardWidth = renderBox.size.width;
-    
-    // Formula: boardStartX + (colIndex * cellWidth) + (cellWidth / 2) - (objectSize / 2)
-    // This centers the object in the column
-    final double cellWidth = boardWidth / _gridSize;
-    final double columnCenterX = boardStartX + (colIndex * cellWidth) + (cellWidth / 2);
-    final double objectX = columnCenterX - (objectSize / 2);
-    
-    return objectX;
-  }
-
-  Widget _buildFallingObjects() {
-    // Cover entire Scaffold body - use MediaQuery for full screen coordinates
-    return Builder(builder: (context) {
-      final Size screenSize = MediaQuery.of(context).size;
-      final double screenHeight = screenSize.height;
-      
-      // Get board dimensions for object size
-      final RenderBox? renderBox = _boardKey.currentContext?.findRenderObject() as RenderBox?;
-      final double cellWidth = renderBox != null ? renderBox.size.width / _gridSize : 50.0; // Fallback size
-      
-      return Stack(
-        children: _fallingObjects.map((obj) {
-          // Calculate x position using the rail system - aligns perfectly with column center
-          final double? calculatedX = _calculateColumnX(obj.col, cellWidth);
-          // Use calculated X if available, otherwise skip rendering this object
-          if (calculatedX == null) return const SizedBox.shrink();
-          
-          // Calculate y position: obj.y goes from 0.0 (top of screen) to 1.0 (bottom of screen)
-          // Map directly to screen coordinates: y=0.0 -> top, y=1.0 -> bottom
-          double y = obj.y * screenHeight;
-          
-          // Create combined cell for rendering (exactly like filled cells)
-          final CombinedCell fallingCell = CombinedCell(
-            shapeId: obj.shapeId,
-            colorId: obj.colorId,
-            numberId: obj.numberId,
-            isFixed: false,
-          );
-          
-          // Render exactly like filled cells using the same method
-          Widget combinedContent = _buildFallingCombinedElement(fallingCell, kRetroText);
-          
-          // Apply simple 2D rotation (much lighter on CPU than 3D transforms)
-          Widget rotatedContent = Transform.rotate(
-            angle: obj.rotationAngle * 0.15, // Subtle wobble as they fall
-            child: combinedContent,
-          );
-          
-          return Positioned(
-            left: calculatedX, 
-            top: y,
-            width: cellWidth, 
-            height: cellWidth,
-            child: Draggable<FallingObject>(
-              data: obj,
-              feedback: Material(
-                color: Colors.transparent,
-                child: SizedBox(
-                  width: cellWidth,
-                  height: cellWidth,
-                  child: Opacity(opacity: 0.8, child: rotatedContent),
-                ),
-              ),
-              childWhenDragging: const SizedBox.shrink(),
-              onDragStarted: () {
-                setState(() {
-                  obj.isBeingDragged = true;
-                });
-              },
-              onDragEnd: (details) {
-                setState(() {
-                  obj.isBeingDragged = false;
-                });
-                // If drag was not accepted (dropped outside valid target), treat as mistake
-                if (!details.wasAccepted) {
-                  _handleMistake();
-                  setState(() {
-                    _fallingObjects.remove(obj);
-                  });
-                }
-              },
-              child: rotatedContent,
-            ),
-          );
-        }).toList(),
-      );
-    });
-  }
-
   Widget _buildTools(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1992,15 +1599,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             }
                           }
                           
-                          // Calculate 2D rotation angle for hard mode (using pre-calculated values for performance)
-                          double rotationAngle = 0.0;
-                          if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && value > 0) {
-                            // Use pre-calculated speed and phase (avoids creating Random every frame)
-                            final double rotationSpeed = _cellRotationSpeeds[cellIndex];
-                            final double phaseOffset = _cellRotationPhases[cellIndex];
-                            rotationAngle = (_rotationController.value * 2 * math.pi * rotationSpeed) + phaseOffset;
-                          }
-                          
                           final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
                           final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
                           Widget cellWidget = _SudokuCell(
@@ -2010,7 +1608,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
                             numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
                             draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
-                            rotationAngle: rotationAngle,
                             row: row,
                             col: col,
                             gridSize: _gridSize,
@@ -2028,49 +1625,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             onTap: () => _selectCell(row, col),
                           );
 
-                          // Wrap with DragTarget for hard mode falling objects (only if combined puzzle exists)
-                          if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && _combinedPuzzle != null) {
-                            cellWidget = DragTarget<FallingObject>(
-                              onWillAcceptWithDetails: (details) {
-                                // Only accept if cell is editable and empty
-                                return isEditable && value == 0;
-                              },
-                              onAcceptWithDetails: (details) {
-                                // Place the falling object in this cell
-                                _handleFallingObjectPlacement(details.data, row, col);
-                              },
-                              builder: (context, candidateData, rejectedData) {
-                                // Provide visual feedback when dragging over valid/invalid cells
-                                Color borderColor = kRetroText.withOpacity(0.1);
-                                if (candidateData.isNotEmpty && isEditable && value == 0) {
-                                  borderColor = kRetroHighlight; // Highlight valid drop target
-                                } else if (rejectedData.isNotEmpty) {
-                                  borderColor = Colors.red.withOpacity(0.5); // Highlight invalid drop target
-                                }
-                                
-                                return Container(
-                                  decoration: BoxDecoration(
-                                    border: Border(
-                                      right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : borderColor, width: rightBorder ? 2 : 1),
-                                      bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : borderColor, width: bottomBorder ? 2 : 1),
-                                    ),
-                                  ),
-                                  child: cellWidget,
-                                );
-                              },
-                            );
-                          } else {
-                            // Non-hard mode: wrap in container with border
-                            cellWidget = Container(
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: rightBorder ? 2 : 0.5),
-                                  bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: bottomBorder ? 2 : 0.5),
-                                ),
+                          // Wrap in container with border
+                          cellWidget = Container(
+                            decoration: BoxDecoration(
+                              border: Border(
+                                right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: rightBorder ? 2 : 0.5),
+                                bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : kRetroText.withOpacity(0.1), width: bottomBorder ? 2 : 0.5),
                               ),
-                              child: cellWidget,
-                            );
-                          }
+                            ),
+                            child: cellWidget,
+                          );
 
                           return Expanded(child: cellWidget);
                         }),
@@ -2311,7 +1875,6 @@ class _SudokuCell extends StatefulWidget {
     this.colorNotes,
     this.numberNotes,
     this.draftCell,
-    required this.rotationAngle,
     required this.row,
     required this.col,
     required this.gridSize,
@@ -2335,7 +1898,6 @@ class _SudokuCell extends StatefulWidget {
   final Set<int>? colorNotes;
   final Set<int>? numberNotes;
   final CombinedCell? draftCell;
-  final double rotationAngle;
   final int row;
   final int col;
   final int gridSize;
@@ -2463,23 +2025,9 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     // Standard mode
     Widget content;
     if (widget.value > 0 || (widget.combinedCell != null && (widget.combinedCell!.shapeId != null || widget.combinedCell!.colorId != null || widget.combinedCell!.numberId != null))) {
-       if (widget.difficulty == Difficulty.hard && widget.gameMode != GameMode.numbers && widget.combinedCell != null) {
-          // Hard mode with combined puzzle: Apply simple 2D rotation (lighter than 3D)
-          Widget combined = _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor);
-          if (widget.rotationAngle != 0.0) {
-            // Simple 2D rotation - much lighter on CPU than 3D transforms
-            content = Transform.rotate(
-              angle: widget.rotationAngle * 0.1, // Subtle wobble effect
-              child: combined,
-            );
-          } else {
-            content = combined;
-          }
-       } else {
-          content = (widget.combinedCell != null)
-                ? _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor)
-                : _buildSingleElement(context, contentColor);
-       }
+       content = (widget.combinedCell != null)
+             ? _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor)
+             : _buildSingleElement(context, contentColor);
     } else if (widget.notes.isNotEmpty) {
        content = _buildNotes();
     } else {
