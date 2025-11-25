@@ -35,34 +35,6 @@ class HintInfo {
   HintInfo(this.title, this.description, this.targetRow, this.targetCol, this.value, this.highlights);
 }
 
-// Simple Vector3 class for axis-angle rotation
-class Vector3 {
-  final double x;
-  final double y;
-  final double z;
-  Vector3(this.x, this.y, this.z);
-}
-
-// Helper function to create rotation matrix from axis and angle (Rodrigues rotation formula)
-Matrix4 _rotationAxis(Vector3 axis, double angle) {
-  // Normalize axis
-  final double length = math.sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
-  final double nx = axis.x / length;
-  final double ny = axis.y / length;
-  final double nz = axis.z / length;
-  
-  final double c = math.cos(angle);
-  final double s = math.sin(angle);
-  final double t = 1 - c;
-  
-  // Rodrigues rotation formula
-  return Matrix4(
-    t * nx * nx + c,        t * nx * ny - s * nz,  t * nx * nz + s * ny,  0,
-    t * nx * ny + s * nz,   t * ny * ny + c,       t * ny * nz - s * nx,  0,
-    t * nx * nz - s * ny,   t * ny * nz + s * nx,  t * nz * nz + c,       0,
-    0,                      0,                      0,                      1,
-  );
-}
 
 class FallingObject {
   String id;
@@ -71,11 +43,7 @@ class FallingObject {
   int shapeId;
   int colorId;
   int numberId;
-  double rotationAngle; // Current rotation angle around axis
-  // Rotation axis as normalized Vector3 (mostly vertical: y≈1.0, x/z small)
-  double axisX;
-  double axisY;
-  double axisZ;
+  double rotationAngle; // Current rotation angle
   double rotationSpeed; // Rotation speed multiplier (0.8-1.5)
   double rotationPhase; // Phase offset for unique starting rotation (0-2π)
   bool isBeingDragged; // Whether this object is currently being dragged
@@ -87,9 +55,6 @@ class FallingObject {
     required this.colorId, 
     required this.numberId, 
     this.rotationAngle = 0.0,
-    required this.axisX,
-    required this.axisY,
-    required this.axisZ,
     required this.rotationSpeed,
     required this.rotationPhase,
     this.isBeingDragged = false,
@@ -916,6 +881,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   // GlobalKey for board container to calculate column positions
   final GlobalKey _boardKey = GlobalKey();
   
+  // Pre-calculated rotation parameters for each cell (avoids creating Random on every frame)
+  late List<double> _cellRotationSpeeds;
+  late List<double> _cellRotationPhases;
+  
   late int _gridSize;
   late int _blockRows;
   late int _blockCols;
@@ -969,6 +938,17 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     } else {
       _shapeMap = allShapes;
     }
+
+    // Pre-calculate rotation parameters for all cells (avoids per-frame Random creation)
+    final int totalCells = _gridSize * _gridSize;
+    _cellRotationSpeeds = List.generate(totalCells, (i) {
+      final rnd = math.Random(i);
+      return 0.7 + (rnd.nextDouble() * 0.7); // 0.7x to 1.4x
+    });
+    _cellRotationPhases = List.generate(totalCells, (i) {
+      final rnd = math.Random(i + 1000); // Different seed
+      return rnd.nextDouble() * 2 * math.pi; // 0 to 2π
+    });
 
     _initializeGame();
     
@@ -1045,19 +1025,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     }
     
     setState(() {
-      // Generate unique rotation axis (normalized Vector3, mostly vertical)
-      // X and Z components are small (0.1-0.3), Y is large (0.9-1.0) to keep face visible
-      final double axisX = (rnd.nextDouble() - 0.5) * 0.4; // -0.2 to 0.2
-      final double axisZ = (rnd.nextDouble() - 0.5) * 0.4; // -0.2 to 0.2
-      final double axisY = 0.9 + (rnd.nextDouble() * 0.1); // 0.9 to 1.0 (mostly vertical)
-      
-      // Normalize the axis vector
-      final double length = math.sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ);
-      final double normalizedX = axisX / length;
-      final double normalizedY = axisY / length;
-      final double normalizedZ = axisZ / length;
-      
-      // Rotation speed: 0.8x to 1.5x (as per requirement)
+      // Rotation speed: 0.8x to 1.5x
       final double speed = 0.8 + (rnd.nextDouble() * 0.7);
       // Phase offset: 0 to 2π for unique starting rotation
       final double phase = rnd.nextDouble() * 2 * math.pi;
@@ -1070,9 +1038,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         colorId: colorId,
         numberId: numberId,
         rotationAngle: 0.0, // Will be calculated using rotation controller
-        axisX: normalizedX,
-        axisY: normalizedY,
-        axisZ: normalizedZ,
         rotationSpeed: speed,
         rotationPhase: phase,
       ));
@@ -1896,14 +1861,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           // Render exactly like filled cells using the same method
           Widget combinedContent = _buildFallingCombinedElement(fallingCell, kRetroText);
           
-          // Apply axis-angle rotation using Rodrigues rotation formula
-          // This ensures the face is always visible and never rotates into horizontal plane
-          final Vector3 rotationAxis = Vector3(obj.axisX, obj.axisY, obj.axisZ);
-          Widget rotatedContent = Transform(
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.001) // Perspective
-              ..multiply(_rotationAxis(rotationAxis, obj.rotationAngle)),
-            alignment: Alignment.center,
+          // Apply simple 2D rotation (much lighter on CPU than 3D transforms)
+          Widget rotatedContent = Transform.rotate(
+            angle: obj.rotationAngle * 0.15, // Subtle wobble as they fall
             child: combinedContent,
           );
           
@@ -2032,28 +1992,17 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             }
                           }
                           
-                          // Calculate 3D rotation angle for hard mode (seamless loop with unique timing per cell)
+                          // Calculate 2D rotation angle for hard mode (using pre-calculated values for performance)
                           double rotationAngle = 0.0;
                           if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && value > 0) {
-                            // Use deterministic pseudo-random generator for unique rotation per cell
-                            final int cellIndex = row * _gridSize + col;
-                            final math.Random cellRnd = math.Random(cellIndex);
-                            
-                            // Unique rotation speed per cell (0.7x to 1.4x of base controller speed)
-                            final double rotationSpeed = 0.7 + (cellRnd.nextDouble() * 0.7);
-                            
-                            // Unique phase offset so cells start at different angles
-                            final double phaseOffset = cellRnd.nextDouble() * 2 * math.pi;
-                            
-                            // Calculate rotation: controller goes 0-1, multiply by 2π for full rotation
-                            // Add phase offset for unique starting angle
+                            // Use pre-calculated speed and phase (avoids creating Random every frame)
+                            final double rotationSpeed = _cellRotationSpeeds[cellIndex];
+                            final double phaseOffset = _cellRotationPhases[cellIndex];
                             rotationAngle = (_rotationController.value * 2 * math.pi * rotationSpeed) + phaseOffset;
-                            // Axis tilt is calculated in the cell widget itself for each cell
                           }
                           
                           final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
                           final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
-
                           Widget cellWidget = _SudokuCell(
                             value: value,
                             notes: _notes[row][col],
@@ -2061,7 +2010,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             colorNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _colorNotes[row][col] : const {},
                             numberNotes: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers ? _numberNotes[row][col] : const {},
                             draftCell: widget.difficulty == Difficulty.medium && widget.mode != GameMode.numbers && isSelected ? _draftCell : null,
-                            rotationAngle: rotationAngle, 
+                            rotationAngle: rotationAngle,
                             row: row,
                             col: col,
                             gridSize: _gridSize,
@@ -2515,25 +2464,12 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     Widget content;
     if (widget.value > 0 || (widget.combinedCell != null && (widget.combinedCell!.shapeId != null || widget.combinedCell!.colorId != null || widget.combinedCell!.numberId != null))) {
        if (widget.difficulty == Difficulty.hard && widget.gameMode != GameMode.numbers && widget.combinedCell != null) {
-          // Hard mode with combined puzzle: Apply 3D rotation around tilted vertical axis
+          // Hard mode with combined puzzle: Apply simple 2D rotation (lighter than 3D)
           Widget combined = _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor);
           if (widget.rotationAngle != 0.0) {
-            // Calculate unique axis tilt for this cell (small angles to keep face visible)
-            final int cellIndex = widget.row * widget.gridSize + widget.col;
-            final math.Random cellRnd = math.Random(cellIndex);
-            final double axisTiltX = 0.1 + (cellRnd.nextDouble() * 0.3); // 0.1 to 0.4 radians
-            final double axisTiltZ = 0.1 + (cellRnd.nextDouble() * 0.3); // 0.1 to 0.4 radians
-            
-            // 3D rotation around tilted vertical axis - keeps face visible most of the time
-            content = Transform(
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.001) // Perspective
-                // Rotate around vertical axis (Y) - main rotation
-                ..rotateY(widget.rotationAngle)
-                // Apply small tilts that vary with rotation to create tilted axis effect
-                ..rotateX(axisTiltX * math.sin(widget.rotationAngle))
-                ..rotateZ(axisTiltZ * math.cos(widget.rotationAngle)),
-              alignment: Alignment.center,
+            // Simple 2D rotation - much lighter on CPU than 3D transforms
+            content = Transform.rotate(
+              angle: widget.rotationAngle * 0.1, // Subtle wobble effect
               child: combined,
             );
           } else {
