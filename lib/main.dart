@@ -83,9 +83,9 @@ class FallingObject {
     required this.id, 
     required this.col, 
     required this.y, 
-    required this.shapeId,
-    required this.colorId,
-    required this.numberId,
+    required this.shapeId, 
+    required this.colorId, 
+    required this.numberId, 
     this.rotationAngle = 0.0,
     required this.axisX,
     required this.axisY,
@@ -1069,7 +1069,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         axisZ: normalizedZ,
         rotationSpeed: speed,
         rotationPhase: phase,
-        isBeingDragged: false,
       ));
     });
   }
@@ -1203,12 +1202,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     }
     super.dispose();
   }
-
   void _selectCell(int row, int col) {
-    // Hard mode now uses drag-and-drop for falling objects
-    // Tap-based placement is disabled in favor of drag-and-drop
-    // (Keeping this method for other selection logic if needed)
-    
+    // Hard mode uses drag-and-drop for falling objects, not tap-based selection
     setState(() {
       // Reset draft if changing cells
       if (_selectedRow != row || _selectedCol != col) {
@@ -1898,7 +1893,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 child: SizedBox(
                   width: cellWidth,
                   height: cellWidth,
-                  child: rotatedContent,
+                  child: Opacity(opacity: 0.8, child: rotatedContent),
                 ),
               ),
               childWhenDragging: const SizedBox.shrink(),
@@ -2011,7 +2006,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             }
                           }
                           
-                          // Calculate 3D rotation angle for hard mode (seamless 4-second loop)
+                          // Calculate 3D rotation angle for hard mode (seamless loop with unique timing per cell)
                           double rotationAngle = 0.0;
                           if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers && value > 0) {
                             // Use deterministic pseudo-random generator for unique rotation per cell
@@ -2057,23 +2052,21 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                             shapeMap: _shapeMap, 
                             onTap: () => _selectCell(row, col),
                           );
-                          
+
                           // Wrap with DragTarget for hard mode falling objects
                           if (widget.difficulty == Difficulty.hard && widget.mode != GameMode.numbers) {
                             cellWidget = DragTarget<FallingObject>(
-                              onWillAccept: (data) {
+                              onWillAcceptWithDetails: (details) {
                                 // Only accept if cell is editable and empty
                                 return isEditable && value == 0;
                               },
-                              onAccept: (obj) {
+                              onAcceptWithDetails: (details) {
                                 // Place the falling object in this cell
-                                _handleFallingObjectPlacement(obj, row, col);
+                                _handleFallingObjectPlacement(details.data, row, col);
                               },
                               builder: (context, candidateData, rejectedData) {
                                 // Provide visual feedback when dragging over valid/invalid cells
-                                Color borderColor = rightBorder || bottomBorder 
-                                    ? kRetroText.withOpacity(0.6) 
-                                    : kRetroText.withOpacity(0.1);
+                                Color borderColor = kRetroText.withOpacity(0.1);
                                 if (candidateData.isNotEmpty && isEditable && value == 0) {
                                   borderColor = kRetroHighlight; // Highlight valid drop target
                                 } else if (rejectedData.isNotEmpty) {
@@ -2083,8 +2076,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                                 return Container(
                                   decoration: BoxDecoration(
                                     border: Border(
-                                      right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : borderColor, width: rightBorder ? 2 : 0.5),
-                                      bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : borderColor, width: bottomBorder ? 2 : 0.5),
+                                      right: BorderSide(color: rightBorder ? kRetroText.withOpacity(0.6) : borderColor, width: rightBorder ? 2 : 1),
+                                      bottom: BorderSide(color: bottomBorder ? kRetroText.withOpacity(0.6) : borderColor, width: bottomBorder ? 2 : 1),
                                     ),
                                   ),
                                   child: cellWidget,
@@ -2103,10 +2096,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                               child: cellWidget,
                             );
                           }
-                          
-                          return Expanded(
-                            child: cellWidget,
-                          );
+
+                          return Expanded(child: cellWidget);
                         }),
                       ),
                     );
