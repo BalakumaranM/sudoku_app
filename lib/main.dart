@@ -2233,7 +2233,22 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     // This handles the bug where resuming a finished game doesn't trigger win
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_isBoardSolved()) {
-        _onLevelComplete();
+        // Game is already completed (resumed from finished state).
+        // Skip win animation and go directly to next level.
+        if (widget.levelNumber >= 50) {
+          // Max level reached, just exit to menu
+          if (mounted) Navigator.pop(context);
+        } else {
+          // Go to next level
+          if (mounted) {
+             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
+              levelNumber: widget.levelNumber + 1, 
+              mode: widget.mode,
+              difficulty: widget.difficulty,
+              sudokuSize: widget.sudokuSize,
+            )));
+          }
+        }
       }
     });
     
@@ -5520,23 +5535,40 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
     final bool showEliminatedMark = widget.highlight == CellHighlight.hintEliminated;
     
     // 5. Build the cell with edge highlight overlay
+    // Use unified logic for both invalid and valid cells to ensure proper selection behavior
+    
     Widget cellContent;
+    
+    Widget buildContent(BuildContext context, Color? flashColor) {
+      Color currentBaseColor = flashColor != null 
+          ? Color.alphaBlend(flashColor, decoration.color ?? Colors.transparent)
+          : (decoration.color ?? Colors.transparent);
+          
+      return _buildCellContainer(
+        decoration.copyWith(color: currentBaseColor),
+        contentColor,
+        showEliminatedMark,
+        edgeHighlight: edgeIntensity > 0 
+            ? _buildEdgeHighlight(
+                highlightColor: highlightBorderColor!,
+                intensity: edgeIntensity,
+                borderWidth: borderWidth,
+                isSelected: isSelected,
+              )
+            : null,
+      );
+    }
+
     if (widget.isInvalid) {
       cellContent = GestureDetector(
         onTap: widget.isEditable ? widget.onTap : null,
         child: AnimatedBuilder(
           animation: _errorController,
           builder: (context, child) {
-            return _buildCellContainer(
-              BoxDecoration(
-                color: _errorController.value > 0 
-                  ? Colors.red.withOpacity(0.5 * _errorController.value) 
-                  : Colors.transparent,
-              ),
-              contentColor,
-              showEliminatedMark,
-              edgeHighlight: null, 
-            );
+            Color? flashColor = _errorController.value > 0 
+                ? Colors.red.withOpacity(0.5 * _errorController.value) 
+                : null;
+            return buildContent(context, flashColor);
           },
         ),
       );
