@@ -1,0 +1,157 @@
+# Numbers Mode
+numbers:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+    description: "6x6 Classic Sudoku with basic techniques"
+  
+  medium:
+    size: 9
+    layers: 1
+    technique_level: 2
+    clues: [35, 45]
+    count: 50
+    description: "9x9 Sudoku requiring Naked/Hidden Pairs"
+  
+  hard:
+    size: 9
+    layers: 1
+    technique_level: 3
+    clues: [30, 35]
+    count: 50
+    description: "9x9 Sudoku requiring Triples, Pointing Pairs"
+  
+  expert:
+    size: 9
+    layers: 1
+    technique_level: 4
+    clues: [25, 30]
+    count: 50
+    description: "9x9 Sudoku requiring X-Wing, Y-Wing"
+  
+  master:
+    size: 9
+    layers: 1
+    technique_level: 5
+    clues: [22, 26]
+    count: 50
+    description: "9x9 Sudoku requiring Swordfish, XYZ-Wing"
+
+# Shapes Mode (Crazy Sudoku with combinations)
+shapes:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+    description: "6x6 Single shape Sudoku"
+  
+  medium:
+    size: 6
+    layers: 2  # Shape + Color
+    technique_level: 2
+    clues: [14, 18]
+    count: 50
+    description: "6x6 2-layer: Shapes and Colors superimposed"
+  
+  hard:
+    size: 6
+    layers: 3  # Shape + Color + Number
+    technique_level: 3
+    clues: [12, 16]
+    count: 50
+    description: "6x6 3-layer: Shapes, Colors, Numbers superimposed"
+  
+  expert:
+    size: 9
+    layers: 3
+    technique_level: 4
+    clues: [25, 30]
+    count: 50
+    description: "9x9 3-layer with X-Wing/Y-Wing"
+  
+  master:
+    size: 9
+    layers: 3
+    technique_level: 5
+    clues: [22, 26]
+    count: 50
+    description: "9x9 3-layer with Swordfish/XYZ-Wing"
+
+# Colors Mode (same as shapes)
+colors:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+  
+  medium:
+    size: 6
+    layers: 2
+    technique_level: 2
+    clues: [14, 18]
+    count: 50
+  
+  hard:
+    size: 6
+    layers: 3
+    technique_level: 3
+    clues: [12, 16]
+    count: 50
+  
+  expert:
+    size: 9
+    layers: 3
+    technique_level: 4
+    clues: [25, 30]
+    count: 50
+  
+  master:
+    size: 9
+    layers: 3
+    technique_level: 5
+    clues: [22, 26]
+    count: 50
+
+# Planets Mode (Easy only)
+planets:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+    description: "6x6 Planet-themed Sudoku"
+
+# Cosmic Mode (Easy only)  
+cosmic:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+    description: "6x6 Cosmic-themed Sudoku"
+
+# Custom Mode (Easy only)
+custom:
+  easy:
+    size: 6
+    layers: 1
+    technique_level: 1
+    clues: [18, 22]
+    count: 50
+    description: "6x6 with user-uploaded images"
+
+# Technique Level Reference:
+# Level 1 (Easy): Naked Singles, Hidden Singles
+# Level 2 (Medium): + Naked Pairs, Hidden Pairs
+# Level 3 (Hard): + Naked Triples, Hidden Triples, Pointing Pairs, Box/Line Reduction
+# Level 4 (Expert): + X-Wing, Y-Wing
+# Level 5 (Master): + Swordfish, XYZ-Wing

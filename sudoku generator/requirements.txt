@@ -1,0 +1,3 @@
+# Sudoku Generator Dependencies
+# No external API needed - all generation is local!
+pyyaml>=6.0

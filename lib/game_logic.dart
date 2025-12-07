@@ -285,10 +285,13 @@ class CombinedPuzzleGenerator {
   }
 
   CombinedPuzzle generateCombined() {
-    // Generate three independent Sudoku puzzles
+    // Generate puzzles based on difficulty
+    // Medium: only shapes and colors (no numbers)
+    // Hard, Expert, Master: all three (shapes, colors, numbers)
     final List<List<int>> shapePuzzle = _generateSinglePuzzle(1);
     final List<List<int>> colorPuzzle = _generateSinglePuzzle(2);
-    final List<List<int>> numberPuzzle = _generateSinglePuzzle(3);
+    final bool includeNumbers = difficultyIndex != 1; // Skip numbers for Medium (index 1)
+    final List<List<int>>? numberPuzzle = includeNumbers ? _generateSinglePuzzle(3) : null;
 
     // Combine into CombinedCell structure
     final List<List<CombinedCell>> solution = List<List<CombinedCell>>.generate(
@@ -298,17 +301,24 @@ class CombinedPuzzleGenerator {
         (int col) => CombinedCell(
           shapeId: shapePuzzle[row][col],
           colorId: colorPuzzle[row][col],
-          numberId: numberPuzzle[row][col],
+          numberId: numberPuzzle != null ? numberPuzzle[row][col] : null,
           isFixed: true,
         ),
       ),
     );
 
     // Randomly select which element to solve.
-    // Use a non-deterministic random here so it changes every round/attempt as requested.
+    // Medium: only shapes or colors (no numbers)
+    // Hard, Expert, Master: all three
     final Random elementRandom = Random();
-    final ElementType selectedElement =
-        ElementType.values[elementRandom.nextInt(3)];
+    final ElementType selectedElement;
+    if (!includeNumbers) {
+      // Medium: choose between shapes and colors only
+      selectedElement = ElementType.values[elementRandom.nextInt(2)]; // 0=shape, 1=color
+    } else {
+      // Hard, Expert, Master: choose from all three
+      selectedElement = ElementType.values[elementRandom.nextInt(3)];
+    }
 
     // Create initial board by removing some cells based on selected element
     final List<List<CombinedCell>> initialBoard = _createInitialBoard(
