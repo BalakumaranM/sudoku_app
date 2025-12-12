@@ -79,8 +79,8 @@ class _AnimatedButtonState extends State<AnimatedButton>
   void _handleTapUp(TapUpDetails details) {
     if (!widget.enabled) return;
     setState(() => _isPressed = false);
-    // Use spring animation for bounce-back
-    _controller.animateWith(_springSimulation);
+    // Always reverse to 1.0 scale
+    _controller.reverse();
     widget.onTapUp?.call();
     if (widget.onTap != null) {
       widget.onTap!();
@@ -90,8 +90,8 @@ class _AnimatedButtonState extends State<AnimatedButton>
   void _handleTapCancel() {
     if (!widget.enabled) return;
     setState(() => _isPressed = false);
-    // Use spring animation for bounce-back
-    _controller.animateWith(_springSimulation);
+    // Always reverse to 1.0 scale
+    _controller.reverse();
     widget.onTapCancel?.call();
   }
 

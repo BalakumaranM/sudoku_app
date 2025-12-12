@@ -23,11 +23,16 @@ class SettingsController extends ChangeNotifier {
     }
   }
 
+  bool _hapticsEnabled = true;
+
+  bool get hapticsEnabled => _hapticsEnabled;
+
   Future<void> init() async {
     if (_initialized) return;
     final prefs = await SharedPreferences.getInstance();
     _animationSpeed = prefs.getString('animation_speed') ?? 'Normal';
     _colorScheme = prefs.getString('color_scheme') ?? 'Default';
+    _hapticsEnabled = prefs.getBool('haptic_feedback') ?? true;
     _initialized = true;
     notifyListeners();
   }
@@ -43,6 +48,13 @@ class SettingsController extends ChangeNotifier {
     _colorScheme = scheme;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('color_scheme', scheme);
+    notifyListeners();
+  }
+
+  Future<void> setHapticsEnabled(bool enabled) async {
+    _hapticsEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('haptic_feedback', enabled);
     notifyListeners();
   }
 }

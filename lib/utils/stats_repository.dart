@@ -92,16 +92,10 @@ class StatsRepository {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     
-    // Prefix construction:
-    // Classic: {Difficulty}_{Mode}_{Size}_level_{Level}
-    // Crazy: {Difficulty}_{Mode}_level_{Level} (keep backward compatible for now)
-    
-    String prefix;
-    if (mode == GameMode.numbers && size != null) {
-       prefix = '${difficulty.name}_${mode.name}_${size.name}_level_';
-    } else {
-       prefix = '${difficulty.name}_${mode.name}_level_';
-    }
+    // Prefix construction - MUST MATCH ProgressRepository._prefix() format
+    // Key format: {Difficulty}_{Mode}_level_{Level}
+    // Note: size parameter is kept for API compatibility but not used in key
+    String prefix = '${difficulty.name}_${mode.name}_level_';
     
     List<LevelDetail> levelDetails = [];
     int totalTime = 0;
@@ -137,17 +131,8 @@ class StatsRepository {
     bool isUnlocked = true;
     if (difficulty == Difficulty.master) {
       // For Master unlock check, we need to check Expert count.
-      // Assuming Master unlocks if Expert (Standard) is played.
-      // Need to resolve how unlocking works across sizes. 
-      // For now, checking 'Expert' generic or specific to size.
-      // Let's check Expert of the SAME size (or default for Crazy)
-      
-      String expertPrefix;
-      if (mode == GameMode.numbers && size != null) {
-         expertPrefix = '${Difficulty.expert.name}_${mode.name}_${size.name}_level_';
-      } else {
-         expertPrefix = '${Difficulty.expert.name}_${mode.name}_level_';
-      }
+      // Key format matches ProgressRepository._prefix() exactly
+      String expertPrefix = '${Difficulty.expert.name}_${mode.name}_level_';
 
       int expertCount = 0;
       for (int i = 1; i <= levelsPerDifficulty; i++) {

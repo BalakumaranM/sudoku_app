@@ -538,6 +538,7 @@ class _GridDrawingPainter extends CustomPainter {
       );
       lineIndex++;
     }
+    // Outer border is already drawn by the board Container decoration
   }
 
   @override
@@ -1036,8 +1037,8 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
                       Navigator.pop(context);
                       SoundManager().stopAmbientMusic();
                       SoundManager().playGameStart();
-                      HapticFeedback.mediumImpact();
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame, sudokuSize: _selectedSize)));
+                      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
                     },
                   ),
                   const SizedBox(height: 12),
@@ -1049,10 +1050,11 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
                       Navigator.pop(context);
                       await CurrentGameRepository.clearGame(mode, diff);
                       if (context.mounted) {
-                          SoundManager().stopAmbientMusic();
+                        SoundManager().stopAmbientMusic();
                         SoundManager().playGameStart();
-                        HapticFeedback.mediumImpact();
-                        _startNewGame(context, mode, diff);
+                        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                        // Start new game at the SAME level as the saved game was
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: savedGame.levelNumber, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
                       }
                     },
                   ),
@@ -1065,27 +1067,27 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
     } else if (context.mounted) {
       SoundManager().stopAmbientMusic();
       SoundManager().playGameStart();
-      HapticFeedback.mediumImpact();
+      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
       _startNewGame(context, mode, diff);
     }
   }
 
   void _startNewGame(BuildContext context, GameMode mode, Difficulty diff) async {
-    final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff);
+    final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff, size: _selectedSize);
     if (context.mounted) {
       SoundManager().stopAmbientMusic();
-      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff, sudokuSize: _selectedSize)));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
     }
   }
 
   Future<void> _loadLevelsAndUnlockStatus() async {
-    final easyLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.easy);
-    final mediumLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.medium);
-    final hardLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.hard);
-    final expertLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.expert);
-    final masterLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.master);
-    final expertUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.expert);
-    final masterUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.master);
+    final easyLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.easy, size: _selectedSize);
+    final mediumLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.medium, size: _selectedSize);
+    final hardLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.hard, size: _selectedSize);
+    final expertLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.expert, size: _selectedSize);
+    final masterLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.master, size: _selectedSize);
+    final expertUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.expert, size: _selectedSize);
+    final masterUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.master, size: _selectedSize);
     
     if (mounted) {
       setState(() {
@@ -1214,8 +1216,9 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
             child: GestureDetector(
               onTap: () {
                 if (_selectedSize != SudokuSize.mini) {
-                  HapticFeedback.selectionClick();
+                  if (SettingsController().hapticsEnabled) HapticFeedback.selectionClick();
                   setState(() => _selectedSize = SudokuSize.mini);
+                  _loadLevelsAndUnlockStatus(); // Reload levels for Mini
                 }
               },
               child: AnimatedContainer(
@@ -1260,8 +1263,9 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
             child: GestureDetector(
               onTap: () {
                 if (_selectedSize != SudokuSize.standard) {
-                  HapticFeedback.selectionClick();
+                  if (SettingsController().hapticsEnabled) HapticFeedback.selectionClick();
                   setState(() => _selectedSize = SudokuSize.standard);
+                  _loadLevelsAndUnlockStatus(); // Reload levels for Standard
                 }
               },
               child: AnimatedContainer(
@@ -1579,13 +1583,13 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
                     Navigator.pop(context);
                     SoundManager().stopAmbientMusic();
                     SoundManager().playGameStart();
-                    HapticFeedback.mediumImpact();
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame)));
+                    if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame))).then((_) => _loadLevelsAndUnlockStatus());
                   },
                 ),
                 const SizedBox(height: 12),
                 CosmicButton(
-                  text: 'NEW GAME',
+                  text: 'RESTART',
                   icon: Icons.refresh,
                   type: CosmicButtonType.secondary,
                   onPressed: () async {
@@ -1594,8 +1598,15 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
                     if (context.mounted) {
                         SoundManager().stopAmbientMusic();
                       SoundManager().playGameStart();
-                      HapticFeedback.mediumImpact();
-                      _startNewGame(context, mode, diff);
+                      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                      // Restart the specific level from the saved game
+                      final int safeLevel = savedGame.levelNumber.clamp(1, 50);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(
+                        levelNumber: safeLevel, // Restart current level with safe bounds
+                        mode: mode,
+                        difficulty: diff,
+                        sudokuSize: savedGame.mode == GameMode.numbers && (mode == GameMode.numbers) ? (savedGame.board.length == 6 ? SudokuSize.mini : SudokuSize.standard) : null,
+                      ))).then((_) => _loadLevelsAndUnlockStatus());
                     }
                   },
                 ),
@@ -1608,7 +1619,7 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
       if (context.mounted) {
           SoundManager().stopAmbientMusic();
         SoundManager().playGameStart();
-        HapticFeedback.mediumImpact();
+        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
         _startNewGame(context, mode, diff);
       }
     }
@@ -1618,7 +1629,7 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
     final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff);
     if (context.mounted) {
       SoundManager().stopAmbientMusic();
-      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff)));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff))).then((_) => _loadLevelsAndUnlockStatus());
     }
   }
 }
@@ -1727,7 +1738,7 @@ class _DifficultyCardState extends State<_DifficultyCard> {
       child: AnimatedButton(
         onTap: widget.isLocked ? () {
         SoundManager().playLocked();
-        HapticFeedback.mediumImpact();
+        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
           setState(() {
             _shouldShake = true;
           });
@@ -1742,7 +1753,7 @@ class _DifficultyCardState extends State<_DifficultyCard> {
           widget.onTap();
       } : () {
         SoundManager().playClick();
-        HapticFeedback.lightImpact();
+        if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
           widget.onTap();
       },
       enabled: true,
@@ -1923,50 +1934,52 @@ class _CustomImageSetupScreenState extends State<CustomImageSetupScreen> {
 
 
 class ProgressRepository {
-  static Future<LevelStatus> getLevelStatus(int level, GameMode mode, Difficulty difficulty) async {
+  static Future<LevelStatus> getLevelStatus(int level, GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     if (level == 1) return LevelStatus.unlocked;
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final String key = '${_prefix(mode, difficulty)}$level';
+    final String key = '${_prefix(mode, difficulty, size: size)}$level';
     final String? status = prefs.getString(key);
     if (status == 'completed') return LevelStatus.completed;
-    final String prevKey = '${_prefix(mode, difficulty)}${level - 1}';
+    final String prevKey = '${_prefix(mode, difficulty, size: size)}${level - 1}';
     if (prefs.getString(prevKey) == 'completed') return LevelStatus.unlocked;
     return LevelStatus.locked;
   }
 
-  static Future<int> getLastUnlockedLevel(GameMode mode, Difficulty difficulty) async {
+  static Future<int> getLastUnlockedLevel(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     for (int i = 1; i <= 50; i++) {
-      final status = await getLevelStatus(i, mode, difficulty);
+      final status = await getLevelStatus(i, mode, difficulty, size: size);
       if (status == LevelStatus.locked) return math.max(1, i - 1);
       if (status == LevelStatus.unlocked) return i;
     }
     return 50;
   }
 
-  static Future<void> completeLevel(int level, GameMode mode, Difficulty difficulty, int stars, int timeSeconds, int mistakes) async {
+  static Future<void> completeLevel(int level, GameMode mode, Difficulty difficulty, int stars, int timeSeconds, int mistakes, {SudokuSize? size}) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final String key = '${_prefix(mode, difficulty)}$level';
+    final String key = '${_prefix(mode, difficulty, size: size)}$level';
     await prefs.setString(key, 'completed');
     await prefs.setInt('${key}_stars', stars);
     await prefs.setInt('${key}_time', timeSeconds);
     await prefs.setInt('${key}_mistakes', mistakes);
   }
 
-  static String _prefix(GameMode mode, Difficulty difficulty) {
+  /// Generate storage key prefix. Uses original format for compatibility with existing data.
+  static String _prefix(GameMode mode, Difficulty difficulty, {SudokuSize? size}) {
+    // Note: size parameter kept for API compatibility but not used in key
     return '${difficulty.name}_${mode.name}_level_';
   }
   
-  static Future<int> getCompletedLevelsCount(GameMode mode, Difficulty difficulty) async {
+  static Future<int> getCompletedLevelsCount(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     int count = 0;
     for (int i = 1; i <= 50; i++) {
-      final String key = '${_prefix(mode, difficulty)}$i';
+      final String key = '${_prefix(mode, difficulty, size: size)}$i';
       if (prefs.getString(key) == 'completed') count++;
     }
     return count;
   }
   
-  static Future<bool> isDifficultyUnlocked(GameMode mode, Difficulty difficulty) async {
+  static Future<bool> isDifficultyUnlocked(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     switch (difficulty) {
       case Difficulty.easy:
       case Difficulty.medium:
@@ -1974,7 +1987,7 @@ class ProgressRepository {
       case Difficulty.expert:
         return true; // Always unlocked
       case Difficulty.master:
-        final expertCount = await getCompletedLevelsCount(mode, Difficulty.expert);
+        final expertCount = await getCompletedLevelsCount(mode, Difficulty.expert, size: size);
         return expertCount >= 3;
     }
   }
@@ -2137,6 +2150,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late int _blockRows;
   late int _blockCols;
   bool _showHighlights = true;
+  bool _showTimer = true;
   
   bool _pencilMode = false;
   int _mistakes = 0;
@@ -2608,7 +2622,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 
                 _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
                 
-                HapticFeedback.lightImpact();
+                if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
                 SoundManager().playSuccessSound();
                 
                 _checkGroupCompletion(_selectedRow!, _selectedCol!);
@@ -2644,7 +2658,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 
                 _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
                 
-                HapticFeedback.lightImpact();
+                if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
                 SoundManager().playSuccessSound();
                 
                 _checkGroupCompletion(_selectedRow!, _selectedCol!);
@@ -2762,7 +2776,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     
     // Haptic and sound feedback (outside setState for immediate response)
     if (isCorrect) {
-      HapticFeedback.lightImpact();
+      if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
       SoundManager().playSuccessSound();
     }
     
@@ -3005,7 +3019,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       });
       // Sound placeholder
       SoundManager().playCompletionSound();
-      HapticFeedback.mediumImpact();
+      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
     }
     
     // Also trigger group completion pulse if needed
@@ -3055,7 +3069,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     SoundManager().stopAmbientMusic(); // Stop music when level completes
     _playWinAnimation();
     CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
-    ProgressRepository.completeLevel(widget.levelNumber, widget.mode, widget.difficulty, 3, _elapsed, _mistakes);
+    ProgressRepository.completeLevel(widget.levelNumber, widget.mode, widget.difficulty, 3, _elapsed, _mistakes, size: widget.sudokuSize);
     
     // Show completion dialog after win animation
     Future.delayed(const Duration(seconds: 2), () {
@@ -3156,10 +3170,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
+              final int safeLevel = widget.levelNumber.clamp(1, 50);
               Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
-                 levelNumber: widget.levelNumber, 
+                 levelNumber: safeLevel, 
                  mode: widget.mode,
-                 difficulty: widget.difficulty
+                 difficulty: widget.difficulty,
+                 sudokuSize: widget.sudokuSize,
               )));
             },
             child: const Text('RESTART'),
@@ -3175,7 +3191,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       final prev = _history.removeLast();
       _board = prev.board;
       _notes = prev.notes;
-      _mistakes = prev.mistakes;
+      // _mistakes = prev.mistakes; // Don't revert mistakes count on undo
       _errorCells.clear();
       
       // Restore combined mode notes if present
@@ -3706,7 +3722,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       _handleInput(val);
     }
     
-    HapticFeedback.lightImpact();
+    if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
     SoundManager().playSuccessSound();
   }
 
@@ -4272,8 +4288,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 onPressed: () {
                    Navigator.pop(context);
                    CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
+                   final int safeLevel = widget.levelNumber.clamp(1, 50);
                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
-                     levelNumber: widget.levelNumber, mode: widget.mode, difficulty: widget.difficulty
+                     levelNumber: safeLevel, mode: widget.mode, difficulty: widget.difficulty, sudokuSize: widget.sudokuSize,
                    )));
                 },
               ),
@@ -4303,8 +4320,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           title: Text('LEVEL ${widget.levelNumber}'), 
           actions: [
             IconButton(
-              icon: Icon(_showHighlights ? Icons.visibility : Icons.visibility_off),
-              onPressed: () => setState(() => _showHighlights = !_showHighlights),
+              icon: Icon(_showTimer ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _showTimer = !_showTimer),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -4334,7 +4351,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(8.0),
-                    child: Text(_formatTime(_elapsed), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    child: Visibility(
+                      visible: _showTimer,
+                      maintainSize: true, 
+                      maintainAnimation: true,
+                      maintainState: true,
+                      child: Text(_formatTime(_elapsed), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    ),
                   ),
                   Expanded(
                     child: Padding(
@@ -4548,7 +4571,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                     color: _winAnimationController.value > 0
                         ? kCosmicPrimary.withOpacity(0.8 + 0.2 * math.sin(_winAnimationController.value * math.pi * 4))
                         : kCosmicPrimary.withOpacity(0.9), // Match block line brightness
-                    width: 4 + (_winAnimationController.value * 2),
+                    width: 2.0, // Same as interior block lines
                   ),
                   boxShadow: _winAnimationController.value > 0
                       ? [

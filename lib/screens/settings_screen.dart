@@ -104,6 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                           (val) {
                             setState(() => _soundEffects = val);
                             _saveSetting('sound_effects', val);
+                            SoundManager().setEnabled(val);
                           },
                         ),
                         _buildToggle(
@@ -123,72 +124,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                           },
                         ),
                       ]),
-                      const SizedBox(height: 20),
-                      _buildSection('Gameplay', [
-                        _buildToggle(
-                          'Haptic Feedback',
-                          'Vibration on interactions',
-                          Icons.vibration,
-                          _hapticFeedback,
-                          (val) {
-                            setState(() => _hapticFeedback = val);
-                            _saveSetting('haptic_feedback', val);
-                          },
-                        ),
-                        _buildToggle(
-                          'Show Timer',
-                          'Display game timer',
-                          Icons.timer,
-                          _timerDisplay,
-                          (val) {
-                            setState(() => _timerDisplay = val);
-                            _saveSetting('timer_display', val);
-                          },
-                        ),
-                        _buildToggle(
-                          'Auto-check Errors',
-                          'Highlight mistakes automatically',
-                          Icons.error_outline,
-                          _autoCheckErrors,
-                          (val) {
-                            setState(() => _autoCheckErrors = val);
-                            _saveSetting('auto_check_errors', val);
-                          },
-                        ),
-                        _buildToggle(
-                          'Highlight Related Cells',
-                          'Show row/column/block highlights',
-                          Icons.highlight,
-                          _highlightCells,
-                          (val) {
-                            setState(() => _highlightCells = val);
-                            _saveSetting('highlight_cells', val);
-                          },
-                        ),
-                      ]),
-                      const SizedBox(height: 20),
-                      _buildSection('Appearance', [
-                        _buildDropdown(
-                          'Animation Speed',
-                          Icons.speed,
-                          _animationSpeed,
-                          ['Slow', 'Normal', 'Fast'],
-                          (val) {
-                            setState(() => _animationSpeed = val!);
-                            SettingsController().setAnimationSpeed(val!);
-                          },
-                        ),
-                        _buildDropdown(
-                          'Color Scheme',
-                          Icons.palette,
-                          _colorScheme,
-                          ['Default', 'High Contrast', 'Colorblind'],
-                          (val) {
-                            setState(() => _colorScheme = val!);
-                            SettingsController().setColorScheme(val!);
-                          },
-                        ),
-                      ]),
+                     /* Haptic Feedback removed as per user request */
                       const SizedBox(height: 20),
                       _buildSection('Data', [
                         _buildActionButton(
@@ -216,37 +152,17 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   }
 
   Widget _buildHeader() {
+    // No back button needed - use swipe gesture to go back
     return Container(
       padding: const EdgeInsets.all(20),
-      child: Row(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
-              onPressed: () {
-                if (widget.onBack != null) {
-                  widget.onBack!();
-                } else {
-                  Navigator.pop(context);
-                }
-              },
-            ),
-          ),
-          const SizedBox(width: 16),
-          const Text(
-            'Settings',
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              letterSpacing: 1.2,
-            ),
-          ),
-        ],
+      child: const Text(
+        'Settings',
+        style: TextStyle(
+          fontSize: 32,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+          letterSpacing: 1.2,
+        ),
       ),
     );
   }

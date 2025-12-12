@@ -138,45 +138,22 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
   }
 
   Widget _buildHeader() {
+    // No back button needed - use swipe gesture to go back
     return Container(
       padding: const EdgeInsets.all(20),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: () {
-              SoundManager().playClick();
-              if (widget.onBack != null) {
-                widget.onBack!();
-              } else {
-                Navigator.pop(context);
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: kCosmicPrimary.withValues(alpha: 0.3)),
-              ),
-              child: const Icon(Icons.arrow_back, color: kCosmicText, size: 24),
-            ),
+      child: ShaderMask(
+        shaderCallback: (bounds) => const LinearGradient(
+          colors: [kCosmicPrimary, kCosmicAccent],
+        ).createShader(bounds),
+        child: const Text(
+          'STATISTICS',
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            letterSpacing: 3,
           ),
-          const SizedBox(width: 16),
-          ShaderMask(
-            shaderCallback: (bounds) => const LinearGradient(
-              colors: [kCosmicPrimary, kCosmicAccent],
-            ).createShader(bounds),
-            child: const Text(
-              'STATISTICS',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                letterSpacing: 3,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -675,14 +652,22 @@ class _TimeGraphPainter extends CustomPainter {
     // Draw line
     canvas.drawPath(path, paint);
     
-    // Draw axis labels
+    // Draw Y-axis labels (5 tick marks: 0, 25%, 50%, 75%, 100%)
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    textPainter.text = TextSpan(
-      text: '${(maxTime ~/ 60)}m',
-      style: TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10),
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, const Offset(0, 0));
+    final labelStyle = TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10);
+    
+    for (int i = 0; i <= 4; i++) {
+      final percent = i / 4.0;
+      final timeValue = (maxTime * percent).toInt();
+      final minutes = timeValue ~/ 60;
+      final seconds = timeValue % 60;
+      final label = minutes > 0 ? '${minutes}m${seconds > 0 ? '${seconds}s' : ''}' : '${seconds}s';
+      final y = size.height - percent * (size.height - 20);
+      
+      textPainter.text = TextSpan(text: label, style: labelStyle);
+      textPainter.layout();
+      textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+    }
   }
 
   @override
@@ -724,13 +709,27 @@ class _MistakesGraphPainter extends CustomPainter {
         ..color = color.withValues(alpha: 0.8)
         ..style = PaintingStyle.fill;
       
-      final rect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x, y, barWidth, barHeight),
-        const Radius.circular(4),
-      );
-      canvas.drawRRect(rect, paint);
-    }
+    final rect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(x, y, barWidth, barHeight),
+      const Radius.circular(4),
+    );
+    canvas.drawRRect(rect, paint);
   }
+  
+  // Draw Y-axis labels (integer values up to max)
+  final textPainter = TextPainter(textDirection: TextDirection.ltr);
+  final labelStyle = TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10);
+  final labelsCount = effectiveMax.toInt().clamp(1, 5);
+  
+  for (int i = 0; i <= labelsCount; i++) {
+    final value = (effectiveMax * i / labelsCount).round();
+    final y = size.height - (i / labelsCount) * (size.height - 20);
+    
+    textPainter.text = TextSpan(text: '$value', style: labelStyle);
+    textPainter.layout();
+    textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+  }
+}
 
   @override
   bool shouldRepaint(covariant _MistakesGraphPainter oldDelegate) => true;
