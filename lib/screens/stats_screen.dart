@@ -62,12 +62,14 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
     final classic = await StatsRepository.getClassicStats(_classicDifficulty, _classicSize);
     final crazy = await StatsRepository.getCrazyStats(_crazyDifficulty);
     
+    if (!mounted) return;
     setState(() {
       _classicStats = classic;
       _crazyStats = crazy;
       _isLoading = false;
     });
     
+    if (!mounted) return;
     _fadeController.forward(from: 0);
   }
 
@@ -671,7 +673,13 @@ class _TimeGraphPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _TimeGraphPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _TimeGraphPainter oldDelegate) {
+     if (levels.length != oldDelegate.levels.length) return true;
+     for (int i = 0; i < levels.length; i++) {
+       if (levels[i].timeSeconds != oldDelegate.levels[i].timeSeconds) return true;
+     }
+     return false;
+  }
 }
 
 /// Bar graph painter for mistakes visualization
@@ -732,5 +740,11 @@ class _MistakesGraphPainter extends CustomPainter {
 }
 
   @override
-  bool shouldRepaint(covariant _MistakesGraphPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _MistakesGraphPainter oldDelegate) {
+    if (levels.length != oldDelegate.levels.length) return true;
+     for (int i = 0; i < levels.length; i++) {
+       if (levels[i].mistakes != oldDelegate.levels[i].mistakes) return true;
+     }
+     return false;
+  }
 }

@@ -865,6 +865,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(height: 64),
                     _MenuButton(
+                      key: const Key('menu_classic'),
                       title: 'SUDOKU',
                       subtitle: 'Classic Numbers',
                       color: kCosmicPrimary,
@@ -878,6 +879,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(height: 24),
                     _MenuButton(
+                      key: const Key('menu_crazy'),
                       title: 'CRAZY SUDOKU',
                       subtitle: 'Shapes, Colors & More',
                       color: kCosmicSecondary,
@@ -901,7 +903,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 }
 
 class _MenuButton extends StatelessWidget {
-  const _MenuButton({required this.title, required this.subtitle, required this.color, required this.onTap});
+  const _MenuButton({super.key, required this.title, required this.subtitle, required this.color, required this.onTap});
   final String title;
   final String subtitle;
   final Color color;
@@ -1002,6 +1004,8 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
     super.didChangeDependencies();
     // Resume ambient music when returning to this screen
     SoundManager().ensureAmbientMusicPlaying();
+    // Reload levels when returning to this screen (e.g., after completing a game)
+    _loadLevelsAndUnlockStatus();
   }
 
   void _showUnlockMessage(BuildContext context, String difficulty, String message) {
@@ -1047,15 +1051,16 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
                     icon: Icons.refresh,
                     type: CosmicButtonType.secondary,
                     onPressed: () async {
-                      Navigator.pop(context);
-                      await CurrentGameRepository.clearGame(mode, diff);
-                      if (context.mounted) {
-                        SoundManager().stopAmbientMusic();
-                        SoundManager().playGameStart();
-                        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                        // Start new game at the SAME level as the saved game was
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: savedGame.levelNumber, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
-                      }
+                       Navigator.pop(context);
+                       await CurrentGameRepository.clearGame(mode, diff);
+                       if (context.mounted) {
+                         SoundManager().stopAmbientMusic();
+                         SoundManager().playGameStart();
+                         if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                         // Start new game at the current unlocked level (not the saved game level)
+                         final int currentLevel = await ProgressRepository.getLastUnlockedLevel(mode, diff, size: _selectedSize);
+                         Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: currentLevel, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
+                       }
                     },
                   ),
                 ],
@@ -1346,6 +1351,8 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
     super.didChangeDependencies();
     // Resume ambient music when returning to this screen
     SoundManager().ensureAmbientMusicPlaying();
+    // Reload levels when returning to this screen (e.g., after completing a game)
+    _loadLevelsAndUnlockStatus();
   }
 
   Future<void> _loadLevelsAndUnlockStatus() async {
@@ -1593,21 +1600,21 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
                   icon: Icons.refresh,
                   type: CosmicButtonType.secondary,
                   onPressed: () async {
-                    Navigator.pop(context);
-                    await CurrentGameRepository.clearGame(mode, diff);
-                    if (context.mounted) {
-                        SoundManager().stopAmbientMusic();
-                      SoundManager().playGameStart();
-                      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                      // Restart the specific level from the saved game
-                      final int safeLevel = savedGame.levelNumber.clamp(1, 50);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(
-                        levelNumber: safeLevel, // Restart current level with safe bounds
-                        mode: mode,
-                        difficulty: diff,
-                        sudokuSize: savedGame.mode == GameMode.numbers && (mode == GameMode.numbers) ? (savedGame.board.length == 6 ? SudokuSize.mini : SudokuSize.standard) : null,
-                      ))).then((_) => _loadLevelsAndUnlockStatus());
-                    }
+                     Navigator.pop(context);
+                     await CurrentGameRepository.clearGame(mode, diff);
+                     if (context.mounted) {
+                         SoundManager().stopAmbientMusic();
+                       SoundManager().playGameStart();
+                       if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                       // Start new game at the current unlocked level (not the saved game level)
+                       final int currentLevel = await ProgressRepository.getLastUnlockedLevel(mode, diff);
+                       Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(
+                         levelNumber: currentLevel,
+                         mode: mode,
+                         difficulty: diff,
+                         sudokuSize: savedGame.mode == GameMode.numbers && (mode == GameMode.numbers) ? (savedGame.board.length == 6 ? SudokuSize.mini : SudokuSize.standard) : null,
+                       ))).then((_) => _loadLevelsAndUnlockStatus());
+                     }
                   },
                 ),
               ],
@@ -2171,7 +2178,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   ElementType? _activeHintElementType;
 
   // Debug toolbar state
-  bool _showDebugToolbar = false;
+  bool _showDebugToolbar = true; // DEBUG: Enabled for testing
 
   @override
   void initState() {
@@ -3112,9 +3119,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
             }
           },
           onClose: () {
-            Navigator.pop(context);
-            // Return to menu and resume ambient music
-            Navigator.pop(context);
+            Navigator.pop(context); // pop dialog
+            Navigator.pop(context); // pop GameScreen
+            // Refresh level data when returning to menu - handled by didChangeDependencies
           },
         ),
       ),
