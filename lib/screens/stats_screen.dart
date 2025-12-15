@@ -142,12 +142,11 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
               left: 0,
               top: 0,
               bottom: 0,
-              width: 40, // Increased width for better hit testing
+              width: 40, // Wide touch area
               child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                // We need to listen to updates to claim the gesture arena from TabBarView
+                behavior: HitTestBehavior.opaque, // Opaque blocks the touch from passing through to TabBarView
                 onHorizontalDragUpdate: (details) {
-                  // Capturing this callback helps this GestureDetector win against the underlying ScrollView
+                  // Listen to updates to ensure we claim the gesture
                 },
                 onHorizontalDragEnd: (details) {
                   // Pop if swiping right with sufficient velocity
@@ -155,6 +154,7 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
                     Navigator.of(context).maybePop();
                   }
                 },
+                child: Container(color: Colors.transparent), // Needed for opaque hit testing
               ),
             ),
           ],
