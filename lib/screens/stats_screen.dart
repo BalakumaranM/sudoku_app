@@ -97,43 +97,62 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
             ],
           ),
         ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              _buildHeader(),
-              _buildTabBar(),
-              Expanded(
-                child: _isLoading
-                    ? _buildLoadingState()
-                    : FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: TabBarView(
-                          controller: _tabController,
-                          children: [
-                            _buildCategoryTab(
-                              isClassic: true,
-                              stats: _classicStats,
-                              difficulty: _classicDifficulty,
-                              onDifficultyChanged: (d) {
-                                setState(() => _classicDifficulty = d);
-                                _loadStats();
-                              },
+        child: Stack(
+          children: [
+            SafeArea(
+              child: Column(
+                children: [
+                  _buildHeader(),
+                  _buildTabBar(),
+                  Expanded(
+                    child: _isLoading
+                        ? _buildLoadingState()
+                        : FadeTransition(
+                            opacity: _fadeAnimation,
+                            child: TabBarView(
+                              controller: _tabController,
+                              children: [
+                                _buildCategoryTab(
+                                  isClassic: true,
+                                  stats: _classicStats,
+                                  difficulty: _classicDifficulty,
+                                  onDifficultyChanged: (d) {
+                                    setState(() => _classicDifficulty = d);
+                                    _loadStats();
+                                  },
+                                ),
+                                _buildCategoryTab(
+                                  isClassic: false,
+                                  stats: _crazyStats,
+                                  difficulty: _crazyDifficulty,
+                                  onDifficultyChanged: (d) {
+                                    setState(() => _crazyDifficulty = d);
+                                    _loadStats();
+                                  },
+                                ),
+                              ],
                             ),
-                            _buildCategoryTab(
-                              isClassic: false,
-                              stats: _crazyStats,
-                              difficulty: _crazyDifficulty,
-                              onDifficultyChanged: (d) {
-                                setState(() => _crazyDifficulty = d);
-                                _loadStats();
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
+                          ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            // Edge Swipe Detector
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 20,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  if (details.primaryVelocity! > 0) {
+                    Navigator.of(context).maybePop();
+                  }
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -654,23 +673,35 @@ class _TimeGraphPainter extends CustomPainter {
     // Draw line
     canvas.drawPath(path, paint);
     
-    // Draw Y-axis labels (5 tick marks: 0, 25%, 50%, 75%, 100%)
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    final labelStyle = TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10);
-    
-    for (int i = 0; i <= 4; i++) {
-      final percent = i / 4.0;
-      final timeValue = (maxTime * percent).toInt();
-      final minutes = timeValue ~/ 60;
-      final seconds = timeValue % 60;
-      final label = minutes > 0 ? '${minutes}m${seconds > 0 ? '${seconds}s' : ''}' : '${seconds}s';
-      final y = size.height - percent * (size.height - 20);
+      // Draw Y-axis labels
+      final textPainter = TextPainter(textDirection: TextDirection.ltr);
+      final labelStyle = TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10);
       
-      textPainter.text = TextSpan(text: label, style: labelStyle);
-      textPainter.layout();
-      textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+      for (int i = 0; i <= 4; i++) {
+        final percent = i / 4.0;
+        final timeValue = (maxTime * percent).toInt();
+        final minutes = timeValue ~/ 60;
+        final seconds = timeValue % 60;
+        final label = minutes > 0 ? '${minutes}m${seconds > 0 ? '${seconds}s' : ''}' : '${seconds}s';
+        final y = size.height - percent * (size.height - 20);
+        
+        textPainter.text = TextSpan(text: label, style: labelStyle);
+        textPainter.layout();
+        textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+      }
+
+      // Draw X-axis labels (Level numbers)
+      for (int i = 0; i < levels.length; i++) {
+         // Show label for every 5th level if crowded, or all if few
+         bool showLabel = levels.length <= 15 || (i % 5 == 0) || i == levels.length - 1;
+         if (!showLabel) continue;
+
+         final x = i * spacing;
+         textPainter.text = TextSpan(text: '${levels[i].level}', style: labelStyle);
+         textPainter.layout();
+         textPainter.paint(canvas, Offset(x - textPainter.width / 2, size.height + 5));
+      }
     }
-  }
 
   @override
   bool shouldRepaint(covariant _TimeGraphPainter oldDelegate) {
@@ -729,15 +760,26 @@ class _MistakesGraphPainter extends CustomPainter {
   final labelStyle = TextStyle(color: kCosmicText.withValues(alpha: 0.4), fontSize: 10);
   final labelsCount = effectiveMax.toInt().clamp(1, 5);
   
-  for (int i = 0; i <= labelsCount; i++) {
-    final value = (effectiveMax * i / labelsCount).round();
-    final y = size.height - (i / labelsCount) * (size.height - 20);
-    
-    textPainter.text = TextSpan(text: '$value', style: labelStyle);
-    textPainter.layout();
-    textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+    for (int i = 0; i <= labelsCount; i++) {
+      final value = (effectiveMax * i / labelsCount).round();
+      final y = size.height - (i / labelsCount) * (size.height - 20);
+      
+      textPainter.text = TextSpan(text: '$value', style: labelStyle);
+      textPainter.layout();
+      textPainter.paint(canvas, Offset(0, y - textPainter.height / 2));
+    }
+
+    // Draw X-axis labels (Level numbers)
+    for (int i = 0; i < levels.length; i++) {
+         bool showLabel = levels.length <= 15 || (i % 5 == 0) || i == levels.length - 1;
+         if (!showLabel) continue;
+
+         final x = i * spacing + (spacing - barWidth) / 2 + barWidth/2;
+         textPainter.text = TextSpan(text: '${levels[i].level}', style: labelStyle);
+         textPainter.layout();
+         textPainter.paint(canvas, Offset(x - textPainter.width / 2, size.height + 5));
+    }
   }
-}
 
   @override
   bool shouldRepaint(covariant _MistakesGraphPainter oldDelegate) {

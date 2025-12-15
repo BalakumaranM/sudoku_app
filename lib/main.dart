@@ -870,7 +870,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     const SizedBox(height: 64),
                     _MenuButton(
                       key: const Key('menu_classic'),
-                      title: 'SUDOKU',
+                      title: 'CLASSIC SUDOKU',
                       subtitle: 'Classic Numbers',
                       color: kCosmicPrimary,
                       onTap: () {
@@ -1443,7 +1443,7 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> wit
                         children: [
                           _buildTypeOption(
                             context,
-                            'SHAPES (6x6)${_easyShapesLevel != null ? ' - Lv$_easyShapesLevel' : ''}',
+                            'SHAPES (6x6)',
                             () {
                               Navigator.pop(context);
                               _startOrContinueGame(context, GameMode.shapes, Difficulty.easy);
@@ -1452,7 +1452,7 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> wit
                           const SizedBox(height: 12),
                           _buildTypeOption(
                             context,
-                            'PLANETS (6x6)${_easyPlanetsLevel != null ? ' - Lv$_easyPlanetsLevel' : ''}',
+                            'PLANETS (6x6)',
                             () {
                               Navigator.pop(context);
                               _startOrContinueGame(context, GameMode.planets, Difficulty.easy);
@@ -1461,7 +1461,7 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> wit
                           const SizedBox(height: 12),
                           _buildTypeOption(
                             context,
-                            'COSMIC (6x6)${_easyCosmicLevel != null ? ' - Lv$_easyCosmicLevel' : ''}',
+                            'COSMIC (6x6)',
                             () {
                               Navigator.pop(context);
                               _startOrContinueGame(context, GameMode.cosmic, Difficulty.easy);
