@@ -93,8 +93,13 @@ class StatsRepository {
     final prefs = await SharedPreferences.getInstance();
     
     // Prefix construction - MUST MATCH ProgressRepository._prefix() format
-    // Key format: {Difficulty}_{Mode}_level_{Level}
-    String prefix = '${difficulty.name}_${mode.name}_level_';
+    // Key format: {Difficulty}_{Mode}_level_{Level} OR {Difficulty}_{Mode}_mini_level_{Level}
+    String prefix;
+    if (size == SudokuSize.mini) {
+      prefix = '${difficulty.name}_${mode.name}_mini_level_';
+    } else {
+      prefix = '${difficulty.name}_${mode.name}_level_';
+    }
     
     List<LevelDetail> levelDetails = [];
     int totalTime = 0;

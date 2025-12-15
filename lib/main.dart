@@ -179,6 +179,9 @@ void main() async {
   runApp(const UnsudokuApp());
 }
 
+// Global RouteObserver to track navigation for refreshing level data
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 class UnsudokuApp extends StatefulWidget {
   const UnsudokuApp({super.key});
 
@@ -353,6 +356,7 @@ class _UnsudokuAppState extends State<UnsudokuApp> with WidgetsBindingObserver {
               ),
             ),
           ),
+          navigatorObservers: [routeObserver],
           home: const HomeScreenWrapper(),
         );
       },
@@ -979,7 +983,7 @@ class SudokuSectionScreen extends StatefulWidget {
   State<SudokuSectionScreen> createState() => _SudokuSectionScreenState();
 }
 
-class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
+class _SudokuSectionScreenState extends State<SudokuSectionScreen> with RouteAware {
   final GameMode _mode = GameMode.numbers;
   SudokuSize _selectedSize = SudokuSize.mini; // Default to Mini (6x6)
   int? _easyLevel;
@@ -1002,9 +1006,22 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Subscribe to RouteObserver to detect when routes are popped back to this screen
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
     // Resume ambient music when returning to this screen
     SoundManager().ensureAmbientMusicPlaying();
-    // Reload levels when returning to this screen (e.g., after completing a game)
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Called when a route is popped and this screen becomes visible again
+    // This is the reliable way to refresh data after returning from game
     _loadLevelsAndUnlockStatus();
   }
 
@@ -1047,7 +1064,7 @@ class _SudokuSectionScreenState extends State<SudokuSectionScreen> {
                   ),
                   const SizedBox(height: 12),
                   CosmicButton(
-                    text: 'NEW GAME',
+                    text: 'RESTART',
                     icon: Icons.refresh,
                     type: CosmicButtonType.secondary,
                     onPressed: () async {
@@ -1324,7 +1341,7 @@ class CrazySudokuSectionScreen extends StatefulWidget {
   State<CrazySudokuSectionScreen> createState() => _CrazySudokuSectionScreenState();
 }
 
-class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
+class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> with RouteAware {
   // Use shapes mode as default for level checking
   final GameMode _defaultMode = GameMode.shapes;
   int? _easyShapesLevel;
@@ -1349,9 +1366,22 @@ class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Subscribe to RouteObserver to detect when routes are popped back to this screen
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
     // Resume ambient music when returning to this screen
     SoundManager().ensureAmbientMusicPlaying();
-    // Reload levels when returning to this screen (e.g., after completing a game)
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Called when a route is popped and this screen becomes visible again
+    // This is the reliable way to refresh data after returning from game
     _loadLevelsAndUnlockStatus();
   }
 
@@ -1735,7 +1765,7 @@ class _DifficultyCardState extends State<_DifficultyCard> {
 
   @override
   Widget build(BuildContext context) {
-    final String displayTitle = widget.currentLevel != null ? '${widget.title} - Lv${widget.currentLevel}' : widget.title;
+    final String displayTitle = widget.title; // Removed 'Lv{n}' as requested by user
     
     final effectiveColor = widget.isLocked ? kCosmicLocked : kCosmicPrimary;
     final opacity = widget.isLocked ? 0.5 : 1.0;
@@ -1942,21 +1972,32 @@ class _CustomImageSetupScreenState extends State<CustomImageSetupScreen> {
 
 class ProgressRepository {
   static Future<LevelStatus> getLevelStatus(int level, GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
-    if (level == 1) return LevelStatus.unlocked;
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String key = '${_prefix(mode, difficulty, size: size)}$level';
     final String? status = prefs.getString(key);
+    
+    // First check if this level is completed
     if (status == 'completed') return LevelStatus.completed;
+    
+    // Level 1 is always unlocked (never locked) if not completed
+    if (level == 1) return LevelStatus.unlocked;
+    
+    // For other levels, check if previous level is completed
     final String prevKey = '${_prefix(mode, difficulty, size: size)}${level - 1}';
     if (prefs.getString(prevKey) == 'completed') return LevelStatus.unlocked;
+    
     return LevelStatus.locked;
   }
 
   static Future<int> getLastUnlockedLevel(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     for (int i = 1; i <= 50; i++) {
       final status = await getLevelStatus(i, mode, difficulty, size: size);
-      if (status == LevelStatus.locked) return math.max(1, i - 1);
-      if (status == LevelStatus.unlocked) return i;
+      if (status == LevelStatus.locked) {
+        return math.max(1, i - 1);
+      }
+      if (status == LevelStatus.unlocked) {
+        return i;
+      }
     }
     return 50;
   }
@@ -1972,7 +2013,9 @@ class ProgressRepository {
 
   /// Generate storage key prefix. Uses original format for compatibility with existing data.
   static String _prefix(GameMode mode, Difficulty difficulty, {SudokuSize? size}) {
-    // Note: size parameter kept for API compatibility but not used in key
+    if (size == SudokuSize.mini) {
+      return '${difficulty.name}_${mode.name}_mini_level_';
+    }
     return '${difficulty.name}_${mode.name}_level_';
   }
   
@@ -2110,7 +2153,7 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
+class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late List<List<int>> _board;
   late List<List<bool>> _isEditable;
   late List<List<Set<int>>> _notes;
@@ -2181,8 +2224,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   bool _showDebugToolbar = true; // DEBUG: Enabled for testing
 
   @override
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeGridSize();
     _initializeHintCounter();
     _stopwatch = Stopwatch();
@@ -2463,7 +2508,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
   Future<void> _saveGameState() async {
     // Skip save for Hard, Expert, Master modes (arcade style)
-    if (widget.difficulty == Difficulty.hard || widget.difficulty == Difficulty.expert || widget.difficulty == Difficulty.master) return;
+    // Save allowed for all modes now (Resume Game feature)
+    // if (widget.difficulty == Difficulty.hard || widget.difficulty == Difficulty.expert || widget.difficulty == Difficulty.master) return;
     
     final state = GameStateData(
       mode: widget.mode,
@@ -2478,7 +2524,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      _saveGameState();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _saveGameState();
     _rotationController.dispose();
     _completionController.dispose();
     _groupCompletionController.dispose();
