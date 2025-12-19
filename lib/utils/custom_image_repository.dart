@@ -10,4 +10,11 @@ class CustomImageRepository {
     final prefs = await SharedPreferences.getInstance();
     return List.generate(9, (i) => prefs.getString('$_keyPrefix$i'));
   }
+
+  static Future<void> clearCustomImages() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (int i = 0; i < 9; i++) {
+      await prefs.remove('$_keyPrefix$i');
+    }
+  }
 }

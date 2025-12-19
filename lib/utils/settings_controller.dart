@@ -24,8 +24,10 @@ class SettingsController extends ChangeNotifier {
   }
 
   bool _hapticsEnabled = true;
+  bool _debugToolsEnabled = false;
 
   bool get hapticsEnabled => _hapticsEnabled;
+  bool get debugToolsEnabled => _debugToolsEnabled;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -33,6 +35,7 @@ class SettingsController extends ChangeNotifier {
     _animationSpeed = prefs.getString('animation_speed') ?? 'Normal';
     _colorScheme = prefs.getString('color_scheme') ?? 'Default';
     _hapticsEnabled = prefs.getBool('haptic_feedback') ?? true;
+    _debugToolsEnabled = prefs.getBool('debug_tools_enabled') ?? false;
     _initialized = true;
     notifyListeners();
   }
@@ -55,6 +58,13 @@ class SettingsController extends ChangeNotifier {
     _hapticsEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('haptic_feedback', enabled);
+    notifyListeners();
+  }
+
+  Future<void> setDebugToolsEnabled(bool enabled) async {
+    _debugToolsEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('debug_tools_enabled', enabled);
     notifyListeners();
   }
 }

@@ -7,7 +7,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:unsudoku/main.dart';
+import 'package:mini_sudoku/main.dart';
 
 void main() {
   testWidgets('App loads smoke test', (WidgetTester tester) async {

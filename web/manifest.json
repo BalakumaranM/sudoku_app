@@ -1,6 +1,6 @@
 {
-    "name": "unsudoku",
-    "short_name": "unsudoku",
+    "name": "Mini Sudoku",
+    "short_name": "Mini Sudoku",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

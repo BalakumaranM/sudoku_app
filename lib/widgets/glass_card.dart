@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../main.dart';
+import 'cosmic_button.dart';
 
 /// A reusable glassmorphism card component
 class GlassCard extends StatelessWidget {
@@ -30,46 +31,58 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final effectiveColor = color ?? kCosmicPrimary;
-    final effectiveBorderColor = borderColor ?? effectiveColor.withOpacity(0.6);
+    final effectiveBorderColor = borderColor ?? effectiveColor.withValues(alpha: 0.6);
 
     Widget card = Container(
       margin: margin,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            effectiveColor.withOpacity(0.1),
-            effectiveColor.withOpacity(0.05),
-            Colors.transparent,
-          ],
-        ),
         borderRadius: BorderRadius.circular(borderRadius),
-        border: Border.all(
-          color: enabled ? effectiveBorderColor : effectiveBorderColor.withOpacity(0.3),
-          width: borderWidth,
-        ),
         boxShadow: [
           BoxShadow(
-            color: effectiveColor.withOpacity(0.3),
+            color: effectiveColor.withValues(alpha: 0.2),
             blurRadius: 20,
             spreadRadius: 2,
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(borderRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Container(
-            padding: padding ?? const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(borderRadius),
+      child: Stack(
+        children: [
+          // 1. Details: Glass Background
+          ClipRRect(
+            borderRadius: BorderRadius.circular(borderRadius),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      effectiveColor.withValues(alpha: 0.1),
+                      effectiveColor.withValues(alpha: 0.05),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                padding: padding ?? const EdgeInsets.all(20),
+                child: child,
+              ),
             ),
-            child: child,
           ),
-        ),
+          
+          // 2. Bevel Border
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: GlassBevelPainter(
+                  borderRadius: BorderRadius.circular(borderRadius),
+                  borderColor: enabled ? effectiveBorderColor : effectiveBorderColor.withValues(alpha: 0.3),
+                  isPressed: false,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
 

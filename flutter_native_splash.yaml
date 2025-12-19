@@ -1,0 +1,11 @@
+flutter_native_splash:
+  color: "#0F0518" # Cosmic Dark
+  background_image: "assets/icons/splash.png"
+  fullscreen: true
+  branding: "assets/icons/splash.png"
+  
+  android_12:
+    image: "assets/icons/icon.png" # Center icon only
+    icon_background_color: "#0F0518" # Match app background
+    # branding removed to avoid squeezed bottom image
+    # background_image removed as it interferes with A12 icon logic

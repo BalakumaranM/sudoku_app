@@ -13,13 +13,13 @@ void showCosmicSnackbar(BuildContext context, String message) {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              kCosmicLocked.withOpacity(0.9),
-              kCosmicLocked.withOpacity(0.8),
+              kCosmicLocked.withValues(alpha: 0.9),
+              kCosmicLocked.withValues(alpha: 0.8),
             ],
           ),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: kCosmicPrimary.withOpacity(0.6),
+            color: kCosmicPrimary.withValues(alpha: 0.6),
             width: 1.5,
           ),
         ),

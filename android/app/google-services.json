@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "849151878730",
+    "project_id": "mini-sudoku-a4e9d",
+    "storage_bucket": "mini-sudoku-a4e9d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:849151878730:android:70e8bd42f56d416da768b3",
+        "android_client_info": {
+          "package_name": "com.duelme.minisudoku"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAewiz5OOZhBKldiKjncnW9ShMzWZ8aWmM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

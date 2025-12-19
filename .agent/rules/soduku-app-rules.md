@@ -3,6 +3,15 @@ trigger: always_on
 ---
 
 --- 
+description: Utilize the MCP's properly
+alwaysApply: true
+---
+You have amazing tools in your hand, unilize them whenever needed 
+
+Sequential thinking, memory, context7, perplexity, github, playwright, etc. Everytime when you have to solve something, think for a moment, can you use the proper MCP for that
+
+
+--- 
 description: Enforce clean, maintainable Flutter code
 globs: **/*.dart
 alwaysApply: true
@@ -87,5 +96,3 @@ Write comprehensive tests first for this feature/fix (cover happy path + edges).
 Then implement code until all tests pass.
 
 Run tests/analyze automatically if possible.
-
-

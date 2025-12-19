@@ -20,23 +20,18 @@ class StatsScreen extends StatefulWidget {
 }
 
 class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin {
-  late TabController _tabController;
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
   
-  Difficulty _classicDifficulty = Difficulty.easy;
-  SudokuSize _classicSize = SudokuSize.standard; // Default to Standard (9x9)
-  Difficulty _crazyDifficulty = Difficulty.easy;
+  Difficulty _difficulty = Difficulty.easy;
+  // SudokuSize is always mini (6x6)
   
-  CategoryStats? _classicStats;
-  CategoryStats? _crazyStats;
+  CategoryStats? _stats;
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(_onTabChanged);
     
     _fadeController = AnimationController(
       vsync: this,
@@ -50,33 +45,22 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
     _loadStats();
   }
 
-  void _onTabChanged() {
-    if (_tabController.indexIsChanging) {
-      _loadStats();
-    }
-  }
-
   Future<void> _loadStats() async {
     setState(() => _isLoading = true);
     
-    final classic = await StatsRepository.getClassicStats(_classicDifficulty, _classicSize);
-    final crazy = await StatsRepository.getCrazyStats(_crazyDifficulty);
+    final stats = await StatsRepository.getClassicStats(_difficulty, SudokuSize.mini);
     
     if (!mounted) return;
     setState(() {
-      _classicStats = classic;
-      _crazyStats = crazy;
+      _stats = stats;
       _isLoading = false;
     });
     
-    if (!mounted) return;
     _fadeController.forward(from: 0);
   }
 
   @override
   void dispose() {
-    _tabController.removeListener(_onTabChanged);
-    _tabController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
@@ -97,64 +81,55 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
             ],
           ),
         ),
-        child: Stack(
+         child: Stack(
           children: [
             SafeArea(
               child: Column(
                 children: [
                   _buildHeader(),
-                  _buildTabBar(),
                   Expanded(
                     child: _isLoading
                         ? _buildLoadingState()
                         : FadeTransition(
                             opacity: _fadeAnimation,
-                            child: TabBarView(
-                              controller: _tabController,
-                              children: [
-                                _buildCategoryTab(
-                                  isClassic: true,
-                                  stats: _classicStats,
-                                  difficulty: _classicDifficulty,
-                                  onDifficultyChanged: (d) {
-                                    setState(() => _classicDifficulty = d);
-                                    _loadStats();
-                                  },
-                                ),
-                                _buildCategoryTab(
-                                  isClassic: false,
-                                  stats: _crazyStats,
-                                  difficulty: _crazyDifficulty,
-                                  onDifficultyChanged: (d) {
-                                    setState(() => _crazyDifficulty = d);
-                                    _loadStats();
-                                  },
-                                ),
-                              ],
+                            child: NotificationListener<Notification>(
+                              onNotification: (notification) {
+                                // Detect overscroll (drag beyond the start)
+                                if (notification is OverscrollNotification) {
+                                  // Check if we are overscrolling at the start (drag right)
+                                  if (notification.overscroll < 0 && 
+                                      notification.metrics.axis == Axis.horizontal) {
+                                      
+                                    // Trigger the back navigation
+                                    Navigator.of(context).maybePop();
+                                    return true;
+                                  }
+                                }
+                                
+                                // Handle BouncingScrollPhysics (negative pixels)
+                                if (notification is ScrollUpdateNotification) {
+                                   if (notification.metrics.axis == Axis.horizontal &&
+                                       notification.metrics.pixels < notification.metrics.minScrollExtent) {
+                                      
+                                      Navigator.of(context).maybePop();
+                                      return true;
+                                   }
+                                }
+                                
+                                // Handle OverscrollIndicatorNotification to kill the stretch visual
+                                if (notification is OverscrollIndicatorNotification) {
+                                  if (notification.leading) {
+                                    notification.disallowIndicator();
+                                    return true;
+                                  }
+                                }
+                                return false;
+                              },
+                              child: _buildStatsContent(),
                             ),
                           ),
                   ),
                 ],
-              ),
-            ),
-            // Edge Swipe Detector
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: 40, // Wide touch area
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque, // Opaque blocks the touch from passing through to TabBarView
-                onHorizontalDragUpdate: (details) {
-                  // Listen to updates to ensure we claim the gesture
-                },
-                onHorizontalDragEnd: (details) {
-                  // Pop if swiping right with sufficient velocity
-                  if ((details.primaryVelocity ?? 0) > 300) { 
-                    Navigator.of(context).maybePop();
-                  }
-                },
-                child: Container(color: Colors.transparent), // Needed for opaque hit testing
               ),
             ),
           ],
@@ -164,66 +139,37 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
   }
 
   Widget _buildHeader() {
-    // No back button needed - use swipe gesture to go back
     return Container(
       padding: const EdgeInsets.all(20),
-      child: ShaderMask(
-        shaderCallback: (bounds) => const LinearGradient(
-          colors: [kCosmicPrimary, kCosmicAccent],
-        ).createShader(bounds),
-        child: const Text(
-          'STATISTICS',
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-            letterSpacing: 3,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTabBar() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-      ),
-      child: TabBar(
-        controller: _tabController,
-        indicator: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kCosmicPrimary.withValues(alpha: 0.3), kCosmicSecondary.withValues(alpha: 0.3)],
-          ),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        indicatorSize: TabBarIndicatorSize.tab,
-        labelColor: kCosmicPrimary,
-        unselectedLabelColor: kCosmicText.withValues(alpha: 0.5),
-        labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-        dividerColor: Colors.transparent,
-        tabs: const [
-          Tab(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.grid_on, size: 20),
-                SizedBox(width: 8),
-                Text('Classic Sudoku'),
-              ],
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Back Button (Left, pointing Left)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new, color: kCosmicText, size: 24),
+              onPressed: () {
+                SoundManager().playClick();
+                widget.onBack?.call();
+              },
+              tooltip: 'Back to Home',
             ),
           ),
-          Tab(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.auto_awesome, size: 20),
-                SizedBox(width: 8),
-                Text('Crazy Sudoku'),
-              ],
+          // Title
+          ShaderMask(
+            shaderCallback: (bounds) => const LinearGradient(
+              colors: [kCosmicPrimary, kCosmicAccent],
+            ).createShader(bounds),
+            child: const Text(
+              'STATISTICS',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                letterSpacing: 3,
+                fontFamily: 'Orbitron',
+              ),
             ),
           ),
         ],
@@ -240,99 +186,31 @@ class _StatsScreenState extends State<StatsScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildCategoryTab({
-    required bool isClassic,
-    required CategoryStats? stats,
-    required Difficulty difficulty,
-    required Function(Difficulty) onDifficultyChanged,
-  }) {
-    if (stats == null) return const SizedBox();
+  Widget _buildStatsContent() {
+    if (_stats == null) return const SizedBox();
     
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildDifficultySelector(difficulty, onDifficultyChanged),
-          const SizedBox(height: 12),
-          if (isClassic) ...[
-            _buildSizeSelector(),
-            const SizedBox(height: 20),
-          ] else 
-            const SizedBox(height: 20),
-          if (!stats.isUnlocked)
+          _buildDifficultySelector(_difficulty, (d) {
+            setState(() => _difficulty = d);
+            _loadStats();
+          }),
+          const SizedBox(height: 20),
+          if (!_stats!.isUnlocked)
             _buildLockedCard()
           else ...[
-            _buildProgressCard(stats),
+            _buildProgressCard(_stats!),
             const SizedBox(height: 20),
-            _buildTimeGraph(stats),
+            _buildTimeGraph(_stats!),
             const SizedBox(height: 20),
-            _buildMistakesGraph(stats),
+            _buildMistakesGraph(_stats!),
+            const SizedBox(height: 40), // Bottom padding
           ],
         ],
-      ),
-    );
-  }
-
-  Widget _buildSizeSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-      ),
-      child: Row(
-        children: [
-          Text(
-            'Size:',
-            style: TextStyle(color: kCosmicText.withValues(alpha: 0.7), fontSize: 14),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Row(
-              children: [
-                _buildSizeOption(SudokuSize.mini, 'Mini (6x6)'),
-                const SizedBox(width: 8),
-                _buildSizeOption(SudokuSize.standard, 'Standard (9x9)'),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSizeOption(SudokuSize size, String label) {
-    final isSelected = _classicSize == size;
-    return GestureDetector(
-      onTap: () {
-        if (!isSelected) {
-          setState(() => _classicSize = size);
-          _loadStats();
-        }
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected 
-              ? kCosmicPrimary.withValues(alpha: 0.3)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected 
-                ? kCosmicPrimary 
-                : Colors.white.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? kCosmicPrimary : kCosmicText.withValues(alpha: 0.6),
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            fontSize: 12,
-          ),
-        ),
       ),
     );
   }

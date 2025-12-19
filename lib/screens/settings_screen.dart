@@ -3,6 +3,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/sound_manager.dart';
 import '../utils/settings_controller.dart';
 import '../utils/stats_repository.dart';
+import '../widgets/glass_modal.dart';
+import '../widgets/cosmic_button.dart';
+import '../widgets/cosmic_snackbar.dart';
+import 'premium_screen.dart';
+import 'legal_screen.dart';
+import '../utils/legal_text.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback? onBack;
@@ -14,7 +20,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProviderStateMixin {
   bool _soundEffects = true;
-  bool _backgroundMusic = true;
   bool _hapticFeedback = true;
   bool _timerDisplay = true;
   bool _autoCheckErrors = true;
@@ -50,7 +55,6 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _soundEffects = prefs.getBool('sound_effects') ?? true;
-      _backgroundMusic = prefs.getBool('background_music') ?? true;
       _hapticFeedback = prefs.getBool('haptic_feedback') ?? true;
       _timerDisplay = prefs.getBool('timer_display') ?? true;
       _autoCheckErrors = prefs.getBool('auto_check_errors') ?? true;
@@ -107,24 +111,21 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                             SoundManager().setEnabled(val);
                           },
                         ),
-                        _buildToggle(
-                          'Background Music',
-                          'Ambient space music',
-                          Icons.music_note,
-                          _backgroundMusic,
-                          (val) {
-                            setState(() => _backgroundMusic = val);
-                            _saveSetting('background_music', val);
-                            SoundManager().setAmbientEnabled(val);
-                            if (!val) {
-                              SoundManager().stopAmbientMusic();
-                            } else {
-                              SoundManager().playAmbientMusic();
-                            }
+                      ]),
+                      _buildSection('Premium', [
+                        _buildActionButton(
+                          'Get Premium',
+                          'Remove ads & Unlimited hints',
+                          Icons.star,
+                          Colors.amberAccent,
+                          () {
+                            SoundManager().playClick();
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
                           },
                         ),
                       ]),
-                     /* Haptic Feedback removed as per user request */
+                      const SizedBox(height: 20),
+                      /* Haptic Feedback removed as per user request */
                       const SizedBox(height: 20),
                       _buildSection('Data', [
                         _buildActionButton(
@@ -136,9 +137,26 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                         ),
                       ]),
                       const SizedBox(height: 20),
+                      _buildSection('Legal', [
+                        _buildActionButton(
+                          'Privacy Policy',
+                          'Read our privacy policy',
+                          Icons.privacy_tip,
+                          Colors.blueAccent,
+                          () => _showLegalScreen('Privacy Policy', LegalText.privacyPolicy),
+                        ),
+                        Divider(color: Colors.white.withOpacity(0.1), height: 1),
+                        _buildActionButton(
+                          'Terms & Conditions',
+                          'Read our terms of service',
+                          Icons.description,
+                          Colors.blueAccent,
+                          () => _showLegalScreen('Terms & Conditions', LegalText.termsAndConditions),
+                        ),
+                      ]),
+                      const SizedBox(height: 20),
                       _buildSection('About', [
                         _buildInfoTile('Version', '1.0.0', Icons.info),
-                        _buildInfoTile('Developer', 'Bala', Icons.code),
                       ]),
                     ],
                   ),
@@ -152,17 +170,38 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   }
 
   Widget _buildHeader() {
-    // No back button needed - use swipe gesture to go back
     return Container(
       padding: const EdgeInsets.all(20),
-      child: const Text(
-        'Settings',
-        style: TextStyle(
-          fontSize: 32,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-          letterSpacing: 1.2,
-        ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Title
+          const Text(
+            'SETTINGS',
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              letterSpacing: 1.2,
+              fontFamily: 'Orbitron',
+            ),
+          ),
+          // Back Button (Right, pointing Right)
+          Align(
+             alignment: Alignment.centerRight,
+             child: Directionality(
+               textDirection: TextDirection.rtl, // To make arrow point right if using standard back icon, or use typical forward icon
+               child: IconButton(
+                 icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 24), // arrow_back_ios_new points left. In RTL it points Right.
+                 onPressed: () {
+                    SoundManager().playClick();
+                    widget.onBack?.call();
+                 },
+                 tooltip: 'Back to Home',
+               ),
+             ),
+          ),
+        ],
       ),
     );
   }
@@ -354,39 +393,54 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   }
 
   void _showResetDialog() {
-    showDialog(
+    GlassModal.show(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1F3A),
-        title: const Text(
-          'Reset Progress?',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'This will delete all your game progress. This action cannot be undone.',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              await StatsRepository.clearAllProgress();
-              if (context.mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('All progress has been reset!')),
-                );
-              }
-            },
-            child: const Text(
-              'Reset',
-              style: TextStyle(color: Colors.redAccent),
+      title: 'RESET PROGRESS?',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'This will delete all your game progress. This action cannot be undone.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 16,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
             ),
-          ),
-        ],
+            const SizedBox(height: 32),
+            CosmicButton(
+              text: 'RESET EVERYTHING',
+              icon: Icons.delete_forever,
+              type: CosmicButtonType.destructive,
+              onPressed: () async {
+                await StatsRepository.clearAllProgress();
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  showCosmicSnackbar(context, 'All progress has been reset!');
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            CosmicButton(
+              text: 'CANCEL',
+              type: CosmicButtonType.secondary,
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLegalScreen(String title, String content) {
+    SoundManager().playClick();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LegalScreen(title: title, content: content),
       ),
     );
   }

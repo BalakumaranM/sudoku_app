@@ -20,9 +20,9 @@ class SudokuGrid:
     def set_value(self, row: int, col: int, value: int) -> None:
         """Set a value and update candidates."""
         self.grid[row][col] = value
-        self.candidates[row][col] = set()
         
         if value > 0:
+            self.candidates[row][col] = set()
             # Remove from row candidates
             for c in range(self.size):
                 self.candidates[row][c].discard(value)
@@ -37,6 +37,22 @@ class SudokuGrid:
             for r in range(box_start_row, box_start_row + self.box_rows):
                 for c in range(box_start_col, box_start_col + self.box_cols):
                     self.candidates[r][c].discard(value)
+        else:
+            # Value is 0 (clearing cell). We must recalculate all candidates
+            # because checking which peers are now valid for the removed value is complex.
+            self.recalculate_candidates()
+
+    def recalculate_candidates(self) -> None:
+        """Recalculate all candidates based on current grid."""
+        # Reset all to full set
+        self.candidates = [[set(range(1, self.size + 1)) for _ in range(self.size)] for _ in range(self.size)]
+        
+        # Apply constraints for all filled cells
+        for r in range(self.size):
+            for c in range(self.size):
+                val = self.grid[r][c]
+                if val > 0:
+                    self.set_value(r, c, val)
     
     def get_value(self, row: int, col: int) -> int:
         """Get the value at a cell."""

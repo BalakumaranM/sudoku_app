@@ -56,7 +56,7 @@ class CategoryStats {
 
 /// Repository for aggregating statistics
 class StatsRepository {
-  static const int levelsPerDifficulty = 50;
+  static const int levelsPerDifficulty = 200;
   
   static const List<Difficulty> allDifficulties = [
     Difficulty.easy,
@@ -74,7 +74,8 @@ class StatsRepository {
 
   /// Get stats for Classic Sudoku at a specific difficulty and size
   static Future<CategoryStats> getClassicStats(Difficulty difficulty, SudokuSize size) async {
-    return _getCategoryStats(classicMode, difficulty, size);
+    // Pass null for size to match ProgressRepository key generation (level_ instead of mini_level_)
+    return _getCategoryStats(classicMode, difficulty, null);
   }
 
   /// Get stats for Crazy Sudoku at a specific difficulty (size is determined by difficulty: Med/Hard=6x6, Easy=4x4?)

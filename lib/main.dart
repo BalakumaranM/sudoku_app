@@ -1,3 +1,4 @@
+import '../screens/category_completion_screen.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -7,13 +8,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import 'game_logic.dart';
-import 'models/game_enums.dart';
-import 'shapes.dart';
+import 'models/game_enums.dart'; // Ensure this file exists and contains GameMode/Difficulty
 import 'package:animate_do/animate_do.dart';
 import 'widgets/animated_button.dart';
 import 'widgets/glass_modal.dart';
@@ -24,11 +21,16 @@ import 'utils/sound_manager.dart';
 import 'utils/settings_controller.dart';
 import 'screens/settings_screen.dart';
 import 'screens/stats_screen.dart';
+import 'screens/splash_screen.dart';
 import 'widgets/cosmic_button.dart';
-
 import 'widgets/game_toolbar.dart';
-import 'utils/custom_image_repository.dart';
 import 'data/classic_puzzles.dart';
+import 'utils/ad_manager.dart';
+import 'utils/iap_manager.dart';
+import 'utils/firebase_service.dart';
+import 'utils/stats_repository.dart';
+import 'package:provider/provider.dart';
+import 'screens/premium_screen.dart';
 
 class CellPosition {
   final int row;
@@ -46,10 +48,6 @@ class HintStep {
   final Set<int>? numberInstances; // Cells containing target number (optional)
   final bool showTargetCell; // Whether to highlight target cell
   final bool showNumber; // Whether to show number in target cell
-  // Visual element display support
-  final int? elementValue; // The value (1-9) of the element to display
-  final GameMode? gameMode; // Game mode for determining visual representation
-  final ElementType? elementType; // Element type for combined modes
   
   HintStep({
     required this.description,
@@ -61,9 +59,6 @@ class HintStep {
     this.numberInstances,
     this.showTargetCell = true,
     this.showNumber = false,
-    this.elementValue,
-    this.gameMode,
-    this.elementType,
   });
 }
 
@@ -91,10 +86,6 @@ class HintInfo {
   final int targetRow;
   final int targetCol;
   final int value;
-  // Visual element support
-  final GameMode? gameMode;
-  final List<int>? shapeMap;
-  final ElementType? elementType;
   
   HintInfo({
     required this.title,
@@ -103,9 +94,6 @@ class HintInfo {
     required this.targetRow,
     required this.targetCol,
     required this.value,
-    this.gameMode,
-    this.shapeMap,
-    this.elementType,
   });
   
   // Helper methods
@@ -123,19 +111,8 @@ class HintInfo {
       targetRow: targetRow,
       targetCol: targetCol,
       value: value,
-      gameMode: gameMode,
-      shapeMap: shapeMap,
-      elementType: elementType,
     );
   }
-  
-  // Legacy constructor for backward compatibility during migration
-  HintInfo.legacy(this.title, String description, this.targetRow, this.targetCol, this.value, Set<int> highlights)
-      : steps = [HintStep(description: description, highlights: highlights)],
-        currentStepIndex = 0,
-        gameMode = null,
-        shapeMap = null,
-        elementType = null;
 }
 
 
@@ -174,9 +151,19 @@ const Color kRetroHint = Color(0xFF00FF55); // Green for Hint
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await FirebaseService().initialize();
   await SoundManager().init();
   await SettingsController().init();
-  runApp(const UnsudokuApp());
+  // Don't await these to speed up launch
+  AdManager.instance.initialize();
+  IAPManager.instance.initialize();
+  
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => IAPManager.instance,
+      child: const UnsudokuApp(),
+    ),
+  );
 }
 
 // Global RouteObserver to track navigation for refreshing level data
@@ -209,16 +196,13 @@ class _UnsudokuAppState extends State<UnsudokuApp> with WidgetsBindingObserver {
       case AppLifecycleState.paused:
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
-        // App going to background - pause music
-        SoundManager().pauseAmbientMusic();
+        // App going to background
         break;
       case AppLifecycleState.resumed:
-        // App returning to foreground - resume music
-        SoundManager().resumeAmbientMusic();
+        // App returning to foreground
         break;
       case AppLifecycleState.detached:
-        // App being destroyed - stop music
-        SoundManager().stopAmbientMusic();
+        // App being destroyed
         break;
     }
   }
@@ -250,11 +234,11 @@ class _UnsudokuAppState extends State<UnsudokuApp> with WidgetsBindingObserver {
         );
 
         return MaterialApp(
-          title: 'Unsudoku',
+            title: 'Mini Sudoku',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             colorScheme: scheme,
-            scaffoldBackgroundColor: kCosmicBackground,
+            scaffoldBackgroundColor: const Color(0xFF0F0518), // Deep cosmic background
             useMaterial3: true,
             fontFamily: 'Rajdhani',
             appBarTheme: AppBarTheme(
@@ -357,7 +341,7 @@ class _UnsudokuAppState extends State<UnsudokuApp> with WidgetsBindingObserver {
             ),
           ),
           navigatorObservers: [routeObserver],
-          home: const HomeScreenWrapper(),
+          home: const SplashScreen(),
         );
       },
     );
@@ -467,12 +451,13 @@ class _StarPainter extends CustomPainter {
 }
 
 /// Custom painter for animating grid lines drawing (Blueprint Effect)
-class _GridDrawingPainter extends CustomPainter {
-  _GridDrawingPainter({
+/// Cosmic Grid Painter: Scans the grid into existence
+class _CosmicGridPainter extends CustomPainter {
+  _CosmicGridPainter({
     required this.gridSize,
     required this.blockRows,
     required this.blockCols,
-    required this.progress,
+    required this.progress, // 0.0 to 1.0 from _startupController
   });
 
   final int gridSize;
@@ -484,8 +469,25 @@ class _GridDrawingPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (progress <= 0) return;
 
+    final double width = size.width;
+    final double height = size.height;
+    final double cellWidth = width / gridSize;
+    final double cellHeight = height / gridSize;
+
+    // --- 1. Scanner Beam Logic ---
+    // The beam moves from top-left (-20%) to bottom-right (120%)
+    // Mapping progress 0.0-1.0 to a diagonal scan range
+    // Using a simple vertical scan for clearer "printing" effect
+    
+    // Scan Line Y position: moves from 0 to height based on progress (0.0 to 0.8)
+    // The last 0.2 is for settling/glow
+    final double scanProgress = (progress * 1.25).clamp(0.0, 1.0); // complete scan by 0.8
+    final double currentScanY = height * scanProgress;
+    
+    // --- 2. Grid Lines (Reveal Behind Scanner) ---
+    
     final Paint linePaint = Paint()
-      ..color = kCosmicPrimary.withOpacity(0.6)
+      ..color = kCosmicPrimary.withOpacity(0.4)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.5;
 
@@ -494,59 +496,85 @@ class _GridDrawingPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    final double cellWidth = size.width / gridSize;
-    final double cellHeight = size.height / gridSize;
-
-    // Calculate total lines to draw
-    final int totalLines = (gridSize - 1) * 2; // Horizontal + vertical
-    final int totalBlockLines = ((gridSize ~/ blockRows) - 1) + ((gridSize ~/ blockCols) - 1);
-    final int totalDrawable = totalLines + totalBlockLines;
-    final int linesToDraw = (totalDrawable * progress).round();
-
-    int lineIndex = 0;
-
-    // Draw horizontal lines
+    // Draw lines only if they are "above" the scan line
+    
+    // Vertical Lines (drawn partially down to currentScanY)
     for (int i = 1; i < gridSize; i++) {
-      if (lineIndex >= linesToDraw) break;
-      final double y = i * cellHeight;
-      final bool isBlockLine = (i % blockRows == 0);
-      final Paint paint = isBlockLine ? blockPaint : linePaint;
-      
-      final double drawProgress = (linesToDraw - lineIndex).clamp(0.0, 1.0).toDouble();
-      final double startX = (size.width / 2) - ((size.width / 2) * drawProgress);
-      final double endX = (size.width / 2) + ((size.width / 2) * drawProgress);
-      
-      canvas.drawLine(
-        Offset(startX, y),
-        Offset(endX, y),
-        paint,
-      );
-      lineIndex++;
-    }
-
-    // Draw vertical lines
-    for (int i = 1; i < gridSize; i++) {
-      if (lineIndex >= linesToDraw) break;
       final double x = i * cellWidth;
       final bool isBlockLine = (i % blockCols == 0);
-      final Paint paint = isBlockLine ? blockPaint : linePaint;
+      final Paint p = isBlockLine ? blockPaint : linePaint;
       
-      final double drawProgress = (linesToDraw - lineIndex).clamp(0.0, 1.0).toDouble();
-      final double startY = (size.height / 2) - ((size.height / 2) * drawProgress);
-      final double endY = (size.height / 2) + ((size.height / 2) * drawProgress);
-      
-      canvas.drawLine(
-        Offset(x, startY),
-        Offset(x, endY),
-        paint,
-      );
-      lineIndex++;
+      // Draw vertical line up to the scan position
+      if (currentScanY > 0) {
+        canvas.drawLine(Offset(x, 0), Offset(x, currentScanY), p);
+      }
     }
-    // Outer border is already drawn by the board Container decoration
+    
+    // Horizontal Lines (drawn if their Y is less than currentScanY)
+    for (int i = 1; i < gridSize; i++) {
+        final double y = i * cellHeight;
+        final bool isBlockLine = (i % blockRows == 0);
+        final Paint p = isBlockLine ? blockPaint : linePaint;
+        
+        // If the scanner has passed this line, draw it fully
+        if (currentScanY >= y) {
+             canvas.drawLine(Offset(0, y), Offset(width, y), p);
+        } else {
+             // Optional: Draw a faint "blueprint" line ahead of time? No, stick to scan.
+        }
+    }
+    
+    // --- 3. Scanner Beam Visuals ---
+    if (scanProgress < 1.0 && scanProgress > 0.0) {
+        final Paint scannerPaint = Paint()
+          ..shader = LinearGradient(
+              colors: [
+                Colors.transparent, 
+                Colors.cyanAccent.withOpacity(0.8), 
+                Colors.cyanAccent, 
+                Colors.cyanAccent.withOpacity(0.8),
+                Colors.transparent
+              ],
+              stops: const [0.0, 0.4, 0.5, 0.6, 1.0],
+          ).createShader(Rect.fromLTWH(0, currentScanY - 10, width, 20))
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2;
+
+        // Draw the main scan laser line
+        canvas.drawLine(Offset(0, currentScanY), Offset(width, currentScanY), scannerPaint);
+        
+        // Add a glow under the scanner
+        final Paint glowPaint = Paint()
+           ..color = Colors.cyanAccent.withOpacity(0.2)
+           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+        canvas.drawRect(Rect.fromLTWH(0, currentScanY - 20, width, 40), glowPaint);
+    }
+    
+    // --- 4. Final Flash / Lock-in (at end) ---
+    if (progress > 0.9) {
+       // A quick white flash over the grid lines to signify "locked"
+       // 0.9 -> 1.0 (opacity 1.0 -> 0.0)
+       double flashOpacity = (1.0 - progress) * 10; 
+       flashOpacity = flashOpacity.clamp(0.0, 0.5); // Max 0.5 opacity
+       
+       if (flashOpacity > 0) {
+         final Paint flashPaint = Paint()
+            ..color = Colors.white.withOpacity(flashOpacity)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.0; // Thicker lines for flash
+            
+         // Flash all block lines
+         for (int i = 1; i < gridSize; i++) {
+             if (i % blockCols == 0) canvas.drawLine(Offset(i * cellWidth, 0), Offset(i * cellWidth, height), flashPaint);
+             if (i % blockRows == 0) canvas.drawLine(Offset(0, i * cellHeight), Offset(width, i * cellHeight), flashPaint);
+         }
+         canvas.drawRect(Rect.fromLTWH(0, 0, width, height), flashPaint);
+       }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _GridDrawingPainter oldDelegate) {
+  bool shouldRepaint(covariant _CosmicGridPainter oldDelegate) {
     return oldDelegate.progress != progress;
   }
 }
@@ -655,37 +683,68 @@ class _WaveCompletionPainter extends CustomPainter {
     }
 
     // Draw Block Wave (Pulse effect)
+    // Draw Block Wave (Flip Glow Effect)
     if (triggerBlockRow != null && triggerBlockCol != null && blockRows != null && blockCols != null) {
-       // Calculate center of block
-       double blockCenterX = (triggerBlockCol! + blockCols! / 2) * cellWidth;
-       double blockCenterY = (triggerBlockRow! + blockRows! / 2) * cellHeight;
+       // Use trigger cell as center if available, otherwise block center
+       double centerX, centerY;
        
-       // Pulse expands from center
-       double pulseRadius = math.max(blockRows!, blockCols!) * cellWidth * progress;
+       if (triggerRow != null && triggerCol != null) {
+         centerX = (triggerCol! + 0.5) * cellWidth;
+         centerY = (triggerRow! + 0.5) * cellHeight;
+       } else {
+         centerX = (triggerBlockCol! + blockCols! / 2) * cellWidth;
+         centerY = (triggerBlockRow! + blockRows! / 2) * cellHeight;
+       }
+       
+       // Calculate max radius needed to cover the block from the trigger point
+       // This ensures the wave covers the whole block 
        double maxRadius = math.max(blockRows!, blockCols!) * cellWidth * 1.5;
        
-       if (pulseRadius < maxRadius) {
-         final Paint blockPaint = Paint()
-           ..color = Colors.purpleAccent.withOpacity(0.4 * (1.0 - progress))
-           ..style = PaintingStyle.fill;
-           
-         // Draw rect for the whole block with fading opacity
-         final Rect blockRect = Rect.fromLTWH(
-           triggerBlockCol! * cellWidth, 
-           triggerBlockRow! * cellHeight, 
-           blockCols! * cellWidth, 
-           blockRows! * cellHeight
-         );
-         canvas.drawRect(blockRect, blockPaint);
+       // Flip Glow Animation
+       // 1. Initial Flash (fast, bright)
+       // 2. Expanding Glow (slower, colorful)
+       
+       // Expanding radius
+       double currentRadius = maxRadius * progress;
+       
+       // Opacity fades out at the end
+       double opacity = 1.0 - progress;
+       opacity = opacity.clamp(0.0, 1.0);
+       
+       // Draw expanding glow circle
+       final Paint glowPaint = Paint()
+         ..shader = RadialGradient(
+           colors: [
+             Colors.white.withOpacity(0.8 * opacity),
+             Colors.purpleAccent.withOpacity(0.4 * opacity),
+             Colors.purple.withOpacity(0.0),
+           ],
+           stops: const [0.0, 0.5, 1.0],
+         ).createShader(Rect.fromCircle(center: Offset(centerX, centerY), radius: currentRadius))
+         ..style = PaintingStyle.fill;
          
-         // Draw expanding ring
-         final Paint ringPaint = Paint()
-           ..color = Colors.white.withOpacity(0.8 * (1.0 - progress))
-           ..style = PaintingStyle.stroke
-           ..strokeWidth = 6 * (1.0 - progress); // Thicker ring
-           
-         canvas.drawCircle(Offset(blockCenterX, blockCenterY), pulseRadius, ringPaint);
-       }
+       canvas.drawCircle(Offset(centerX, centerY), currentRadius, glowPaint);
+       
+       // Draw a crisp expanding ring
+       final Paint ringPaint = Paint()
+         ..color = Colors.white.withOpacity(0.6 * opacity)
+         ..style = PaintingStyle.stroke
+         ..strokeWidth = 4 * (1.0 - progress); // Thins out
+         
+       canvas.drawCircle(Offset(centerX, centerY), currentRadius * 0.8, ringPaint);
+       
+       // Highlight the block itself slightly to show completion
+       final Paint blockTint = Paint()
+         ..color = Colors.purpleAccent.withOpacity(0.1 * opacity)
+         ..style = PaintingStyle.fill;
+         
+       final Rect blockRect = Rect.fromLTWH(
+         triggerBlockCol! * cellWidth, 
+         triggerBlockRow! * cellHeight, 
+         blockCols! * cellWidth, 
+         blockRows! * cellHeight
+       );
+       canvas.drawRect(blockRect, blockTint);
     }
   }
 
@@ -742,7 +801,18 @@ class _HomeScreenWrapperState extends State<HomeScreenWrapper> {
                   curve: Curves.easeOut,
                 ),
               ),
-              const HomeScreen(),
+              HomeScreen(
+                onToSettings: () => _pageController.animateToPage(
+                  0,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                ),
+                onToStats: () => _pageController.animateToPage(
+                  2,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                ),
+              ),
               StatsScreen(
                 onBack: () => _pageController.animateToPage(
                   1,
@@ -794,13 +864,33 @@ class _HomeScreenWrapperState extends State<HomeScreenWrapper> {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final VoidCallback? onToSettings;
+  final VoidCallback? onToStats;
+
+  const HomeScreen({
+    super.key,
+    this.onToSettings,
+    this.onToStats,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin, RouteAware {
+  // Hardcoded for Mini Sudoku Refactor
+
+  final GameMode _mode = GameMode.numbers;
+
+  int? _easyLevel;
+  int? _mediumLevel;
+  int? _hardLevel;
+  int? _expertLevel;
+  int? _masterLevel;
+  bool _expertUnlocked = false;
+  bool _masterUnlocked = false;
+  bool _isLoading = true;
+
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -814,93 +904,315 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _pulseAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    // Start ambient music on home screen
-    SoundManager().playAmbientMusic();
-  }
-
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    // Don't stop ambient music here - let it continue or stop when app closes
-    super.dispose();
+    
+    _loadLevelsAndUnlockStatus();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Resume ambient music when returning to home screen
-    SoundManager().playAmbientMusic();
+    // Subscribe to RouteObserver
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Refresh levels when returning from game
+    _loadLevelsAndUnlockStatus();
+  }
+
+  Future<void> _loadLevelsAndUnlockStatus() async {
+    final easyLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.easy);
+    final mediumLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.medium);
+    final hardLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.hard);
+    final expertLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.expert);
+    final masterLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.master);
+    final expertUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.expert);
+    final masterUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.master);
+    
+    if (mounted) {
+      setState(() {
+        _easyLevel = easyLevel;
+        _mediumLevel = mediumLevel;
+        _hardLevel = hardLevel;
+        _expertLevel = expertLevel;
+        _masterLevel = masterLevel;
+        _expertUnlocked = expertUnlocked;
+        _masterUnlocked = masterUnlocked;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _showUnlockMessage(BuildContext context, String difficulty, String message) {
+    showCosmicSnackbar(context, message);
+  }
+
+  void _startOrContinueGame(BuildContext context, GameMode mode, Difficulty diff) async {
+    final savedGame = await CurrentGameRepository.loadGame(mode, diff);
+    if (savedGame != null && context.mounted) {
+      GlassModal.show(
+        context: context,
+        title: 'RESUME GAME?',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Time: ${_formatTime(savedGame.elapsedSeconds)}',
+              style: const TextStyle(
+                fontFamily: 'Rajdhani',
+                fontSize: 18,
+                color: kCosmicText,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Column(
+              children: [
+                CosmicButton(
+                  text: 'CONTINUE',
+                  icon: Icons.play_arrow,
+                  onPressed: () {
+                    Navigator.pop(context);
+                    SoundManager().playGameStart();
+                    if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame))).then((_) => _loadLevelsAndUnlockStatus());
+                  },
+                ),
+                const SizedBox(height: 12),
+                CosmicButton(
+                  text: 'RESTART',
+                  icon: Icons.refresh,
+                  type: CosmicButtonType.secondary,
+                  onPressed: () async {
+                     Navigator.pop(context);
+                      await CurrentGameRepository.clearGame(mode, diff);
+                      if (context.mounted) {
+                        SoundManager().playGameStart();
+                        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                        // Start new game at the current unlocked level (not the saved game level)
+                        final int currentLevel = await ProgressRepository.getLastUnlockedLevel(mode, diff);
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: currentLevel, mode: mode, difficulty: diff))).then((_) => _loadLevelsAndUnlockStatus());
+                      }
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    } else if (context.mounted) {
+      SoundManager().playGameStart();
+      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+      _startNewGame(context, mode, diff);
+    }
+  }
+
+  void _startNewGame(BuildContext context, GameMode mode, Difficulty diff) async {
+    final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff);
+    
+    if (!mounted) return;
+    if (context.mounted) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff))).then((_) => _loadLevelsAndUnlockStatus());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    const String sizeKey = 'mini';
+    const String gridLabel = '6×6';
+    
     return Scaffold(
       body: Stack(
         children: [
           const StarryBackground(),
-          SafeArea(
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    AnimatedBuilder(
-                      animation: _pulseAnimation,
-                      builder: (context, child) {
-                        return Opacity(
-                          opacity: _pulseAnimation.value,
-                          child: Text(
-                            'UNSUDOKU',
-                            style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: kCosmicText,
-                              letterSpacing: 4,
-                              shadows: [
-                                Shadow(
-                                  color: kCosmicPrimary.withOpacity(0.5),
-                                  blurRadius: 20,
-                                ),
-                              ],
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 20),
+                      // App Title
+                      AnimatedBuilder(
+                        animation: _pulseAnimation,
+                        builder: (context, child) {
+                          return Opacity(
+                            opacity: _pulseAnimation.value,
+                            child: Text(
+                              'MINI SUDOKU',
+                              style: Theme.of(context).textTheme.displayMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: kCosmicText,
+                                letterSpacing: 4,
+                                shadows: [
+                                  Shadow(
+                                    color: kCosmicPrimary.withOpacity(0.5),
+                                    blurRadius: 20,
+                                  ),
+                                ],
+                              ),
                             ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'COSMIC EDITION',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: kCosmicPrimary,
+                          letterSpacing: 6,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      
+                      // Explicit Navigation Buttons directly on implementation
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _buildNavButton(
+                            icon: Icons.settings,
+                            label: 'SETTINGS',
+                            onTap: widget.onToSettings ?? () {},
                           ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 64),
-                    _MenuButton(
-                      key: const Key('menu_classic'),
-                      title: 'CLASSIC SUDOKU',
-                      subtitle: 'Classic Numbers',
-                      color: kCosmicPrimary,
-                      onTap: () {
-                        SoundManager().playClick();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const SudokuSectionScreen()),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    _MenuButton(
-                      key: const Key('menu_crazy'),
-                      title: 'CRAZY SUDOKU',
-                      subtitle: 'Shapes, Colors & More',
-                      color: kCosmicSecondary,
-                      onTap: () {
-                        SoundManager().playClick();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const CrazySudokuSectionScreen()),
-                        );
-                      },
-                    ),
-                  ],
+                          const SizedBox(width: 24),
+                          _buildNavButton(
+                            icon: Icons.bar_chart,
+                            label: 'STATISTICS',
+                            onTap: widget.onToStats ?? () {},
+                          ),
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 32),
+                      
+                      // Difficulty List
+                      Expanded(
+                        child: ListView(
+                          padding: EdgeInsets.zero,
+                          children: [
+                            StaggeredSlideFade(
+                              key: ValueKey('sudoku_easy_${sizeKey}_${_easyLevel ?? 0}'),
+                              delay: const Duration(milliseconds: 100),
+                              child: _DifficultyCard(
+                                title: 'EASY',
+                                description: '$gridLabel GRID',
+                                difficulty: Difficulty.easy,
+                                color: kCosmicPrimary,
+                                currentLevel: _easyLevel,
+                                isLocked: false,
+                                onTap: () => _startOrContinueGame(context, _mode, Difficulty.easy),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            StaggeredSlideFade(
+                              key: ValueKey('sudoku_medium_${sizeKey}_${_mediumLevel ?? 0}'),
+                              delay: const Duration(milliseconds: 200),
+                              child: _DifficultyCard(
+                                title: 'MEDIUM',
+                                description: '$gridLabel GRID',
+                                difficulty: Difficulty.medium,
+                                color: kCosmicPrimary,
+                                currentLevel: _mediumLevel,
+                                isLocked: false,
+                                onTap: () => _startOrContinueGame(context, _mode, Difficulty.medium),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            StaggeredSlideFade(
+                              key: ValueKey('sudoku_hard_${sizeKey}_${_hardLevel ?? 0}'),
+                              delay: const Duration(milliseconds: 300),
+                              child: _DifficultyCard(
+                                title: 'HARD',
+                                description: '$gridLabel GRID',
+                                difficulty: Difficulty.hard,
+                                color: kCosmicPrimary,
+                                currentLevel: _hardLevel,
+                                isLocked: false,
+                                onTap: () => _startOrContinueGame(context, _mode, Difficulty.hard),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            StaggeredSlideFade(
+                              key: ValueKey('sudoku_expert_${sizeKey}_${_expertLevel ?? 0}'),
+                              delay: const Duration(milliseconds: 400),
+                              child: _DifficultyCard(
+                                title: 'EXPERT',
+                                description: '$gridLabel GRID',
+                                difficulty: Difficulty.expert,
+                                color: kCosmicPrimary,
+                                currentLevel: _expertUnlocked ? _expertLevel : null,
+                                isLocked: !_expertUnlocked,
+                                onTap: _expertUnlocked
+                                    ? () => _startOrContinueGame(context, _mode, Difficulty.expert)
+                                    : () => _showUnlockMessage(context, 'Expert', 'Need to complete 3 levels of Hard to open this'),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            StaggeredSlideFade(
+                              key: ValueKey('sudoku_master_${sizeKey}_${_masterLevel ?? 0}'),
+                              delay: const Duration(milliseconds: 500),
+                              child: _DifficultyCard(
+                                title: 'MASTER',
+                                description: '$gridLabel GRID',
+                                difficulty: Difficulty.master,
+                                color: kCosmicPrimary,
+                                currentLevel: _masterUnlocked ? _masterLevel : null,
+                                isLocked: !_masterUnlocked,
+                                onTap: _masterUnlocked
+                                    ? () => _startOrContinueGame(context, _mode, Difficulty.master)
+                                    : () => _showUnlockMessage(context, 'Master', 'Need to complete 3 levels of Expert to open this'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ),
         ],
+      ),
+    );
+  }
+  
+  Widget _buildNavButton({required IconData icon, required String label, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: () {
+        SoundManager().playClick();
+        onTap();
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: BoxDecoration(
+          color: kCosmicLocked.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: kCosmicPrimary.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: kCosmicText, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'Orbitron',
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: kCosmicText,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -973,701 +1285,6 @@ class _MenuButton extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class SudokuSectionScreen extends StatefulWidget {
-  const SudokuSectionScreen({super.key});
-
-  @override
-  State<SudokuSectionScreen> createState() => _SudokuSectionScreenState();
-}
-
-class _SudokuSectionScreenState extends State<SudokuSectionScreen> with RouteAware {
-  final GameMode _mode = GameMode.numbers;
-  SudokuSize _selectedSize = SudokuSize.mini; // Default to Mini (6x6)
-  int? _easyLevel;
-  int? _mediumLevel;
-  int? _hardLevel;
-  int? _expertLevel;
-  int? _masterLevel;
-  bool _expertUnlocked = false;
-  bool _masterUnlocked = false;
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadLevelsAndUnlockStatus();
-    // Start ambient music when entering difficulty selection screen
-    SoundManager().playAmbientMusic();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Subscribe to RouteObserver to detect when routes are popped back to this screen
-    routeObserver.subscribe(this, ModalRoute.of(context)!);
-    // Resume ambient music when returning to this screen
-    SoundManager().ensureAmbientMusicPlaying();
-  }
-
-  @override
-  void dispose() {
-    routeObserver.unsubscribe(this);
-    super.dispose();
-  }
-
-  @override
-  void didPopNext() {
-    // Called when a route is popped and this screen becomes visible again
-    // This is the reliable way to refresh data after returning from game
-    _loadLevelsAndUnlockStatus();
-  }
-
-  void _showUnlockMessage(BuildContext context, String difficulty, String message) {
-    showCosmicSnackbar(context, message);
-  }
-
-  void _startOrContinueGame(BuildContext context, GameMode mode, Difficulty diff) async {
-    final savedGame = await CurrentGameRepository.loadGame(mode, diff);
-    if (savedGame != null && context.mounted) {
-      GlassModal.show(
-        context: context,
-        title: 'RESUME GAME?',
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Time: ${_formatTime(savedGame.elapsedSeconds)}',
-                style: const TextStyle(
-                  fontFamily: 'Rajdhani',
-                  fontSize: 18,
-                  color: kCosmicText,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Column(
-                children: [
-                  CosmicButton(
-                    text: 'CONTINUE',
-                    icon: Icons.play_arrow,
-                    onPressed: () {
-                      Navigator.pop(context);
-                      SoundManager().stopAmbientMusic();
-                      SoundManager().playGameStart();
-                      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  CosmicButton(
-                    text: 'RESTART',
-                    icon: Icons.refresh,
-                    type: CosmicButtonType.secondary,
-                    onPressed: () async {
-                       Navigator.pop(context);
-                       await CurrentGameRepository.clearGame(mode, diff);
-                       if (context.mounted) {
-                         SoundManager().stopAmbientMusic();
-                         SoundManager().playGameStart();
-                         if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                         // Start new game at the current unlocked level (not the saved game level)
-                         final int currentLevel = await ProgressRepository.getLastUnlockedLevel(mode, diff, size: _selectedSize);
-                         Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: currentLevel, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
-                       }
-                    },
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-    } else if (context.mounted) {
-      SoundManager().stopAmbientMusic();
-      SoundManager().playGameStart();
-      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-      _startNewGame(context, mode, diff);
-    }
-  }
-
-  void _startNewGame(BuildContext context, GameMode mode, Difficulty diff) async {
-    final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff, size: _selectedSize);
-    if (context.mounted) {
-      SoundManager().stopAmbientMusic();
-      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff, sudokuSize: _selectedSize))).then((_) => _loadLevelsAndUnlockStatus());
-    }
-  }
-
-  Future<void> _loadLevelsAndUnlockStatus() async {
-    final easyLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.easy, size: _selectedSize);
-    final mediumLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.medium, size: _selectedSize);
-    final hardLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.hard, size: _selectedSize);
-    final expertLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.expert, size: _selectedSize);
-    final masterLevel = await ProgressRepository.getLastUnlockedLevel(_mode, Difficulty.master, size: _selectedSize);
-    final expertUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.expert, size: _selectedSize);
-    final masterUnlocked = await ProgressRepository.isDifficultyUnlocked(_mode, Difficulty.master, size: _selectedSize);
-    
-    if (mounted) {
-      setState(() {
-        _easyLevel = easyLevel;
-        _mediumLevel = mediumLevel;
-        _hardLevel = hardLevel;
-        _expertLevel = expertLevel;
-        _masterLevel = masterLevel;
-        _expertUnlocked = expertUnlocked;
-        _masterUnlocked = masterUnlocked;
-        _isLoading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isMini = _selectedSize == SudokuSize.mini;
-    final String gridLabel = isMini ? '6×6' : '9×9';
-    
-    return Scaffold(
-      appBar: AppBar(title: const Text('CLASSIC SUDOKU')),
-      body: Stack(
-        children: [
-          const StarryBackground(),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : ListView(
-            padding: const EdgeInsets.all(24),
-            children: [
-              // Mini/Standard Toggle
-              _buildSizeToggle(),
-              const SizedBox(height: 24),
-              // Difficulty cards
-              StaggeredSlideFade(
-                key: ValueKey('sudoku_easy_${_selectedSize.name}_${_easyLevel ?? 0}'),
-                delay: const Duration(milliseconds: 100),
-                child: _DifficultyCard(
-                  title: 'EASY',
-                  description: '$gridLabel GRID',
-                  difficulty: Difficulty.easy,
-                  color: kCosmicPrimary,
-                  currentLevel: _easyLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, _mode, Difficulty.easy),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('sudoku_medium_${_selectedSize.name}_${_mediumLevel ?? 0}'),
-                delay: const Duration(milliseconds: 200),
-                child: _DifficultyCard(
-                  title: 'MEDIUM',
-                  description: '$gridLabel GRID',
-                  difficulty: Difficulty.medium,
-                  color: kCosmicPrimary,
-                  currentLevel: _mediumLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, _mode, Difficulty.medium),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('sudoku_hard_${_selectedSize.name}_${_hardLevel ?? 0}'),
-                delay: const Duration(milliseconds: 300),
-                child: _DifficultyCard(
-                  title: 'HARD',
-                  description: '$gridLabel GRID',
-                  difficulty: Difficulty.hard,
-                  color: kCosmicPrimary,
-                  currentLevel: _hardLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, _mode, Difficulty.hard),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('sudoku_expert_${_selectedSize.name}_${_expertLevel ?? 0}'),
-                delay: const Duration(milliseconds: 400),
-                child: _DifficultyCard(
-                  title: 'EXPERT',
-                  description: '$gridLabel GRID',
-                  difficulty: Difficulty.expert,
-                  color: kCosmicPrimary,
-                  currentLevel: _expertUnlocked ? _expertLevel : null,
-                  isLocked: !_expertUnlocked,
-                  onTap: _expertUnlocked
-                      ? () => _startOrContinueGame(context, _mode, Difficulty.expert)
-                      : () => _showUnlockMessage(context, 'Expert', 'Need to complete 3 levels of Hard to open this'),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('sudoku_master_${_selectedSize.name}_${_masterLevel ?? 0}'),
-                delay: const Duration(milliseconds: 500),
-                child: _DifficultyCard(
-                  title: 'MASTER',
-                  description: '$gridLabel GRID',
-                  difficulty: Difficulty.master,
-                  color: kCosmicPrimary,
-                  currentLevel: _masterUnlocked ? _masterLevel : null,
-                  isLocked: !_masterUnlocked,
-                  onTap: _masterUnlocked
-                      ? () => _startOrContinueGame(context, _mode, Difficulty.master)
-                      : () => _showUnlockMessage(context, 'Master', 'Need to complete 3 levels of Expert to open this'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSizeToggle() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.2)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (_selectedSize != SudokuSize.mini) {
-                  if (SettingsController().hapticsEnabled) HapticFeedback.selectionClick();
-                  setState(() => _selectedSize = SudokuSize.mini);
-                  _loadLevelsAndUnlockStatus(); // Reload levels for Mini
-                }
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _selectedSize == SudokuSize.mini
-                      ? kCosmicPrimary.withOpacity(0.8)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'MINI',
-                      style: TextStyle(
-                        fontFamily: 'Rajdhani',
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: _selectedSize == SudokuSize.mini
-                            ? Colors.white
-                            : Colors.white.withOpacity(0.6),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '6×6',
-                      style: TextStyle(
-                        fontFamily: 'Rajdhani',
-                        fontSize: 12,
-                        color: _selectedSize == SudokuSize.mini
-                            ? Colors.white.withOpacity(0.8)
-                            : Colors.white.withOpacity(0.4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (_selectedSize != SudokuSize.standard) {
-                  if (SettingsController().hapticsEnabled) HapticFeedback.selectionClick();
-                  setState(() => _selectedSize = SudokuSize.standard);
-                  _loadLevelsAndUnlockStatus(); // Reload levels for Standard
-                }
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _selectedSize == SudokuSize.standard
-                      ? kCosmicPrimary.withOpacity(0.8)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'STANDARD',
-                      style: TextStyle(
-                        fontFamily: 'Rajdhani',
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: _selectedSize == SudokuSize.standard
-                            ? Colors.white
-                            : Colors.white.withOpacity(0.6),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '9×9',
-                      style: TextStyle(
-                        fontFamily: 'Rajdhani',
-                        fontSize: 12,
-                        color: _selectedSize == SudokuSize.standard
-                            ? Colors.white.withOpacity(0.8)
-                            : Colors.white.withOpacity(0.4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class CrazySudokuSectionScreen extends StatefulWidget {
-  const CrazySudokuSectionScreen({super.key});
-
-  @override
-  State<CrazySudokuSectionScreen> createState() => _CrazySudokuSectionScreenState();
-}
-
-class _CrazySudokuSectionScreenState extends State<CrazySudokuSectionScreen> with RouteAware {
-  // Use shapes mode as default for level checking
-  final GameMode _defaultMode = GameMode.shapes;
-  int? _easyShapesLevel;
-  int? _easyPlanetsLevel;
-  int? _easyCosmicLevel;
-  int? _mediumLevel;
-  int? _hardLevel;
-  int? _expertLevel;
-  int? _masterLevel;
-  bool _expertUnlocked = false;
-  bool _masterUnlocked = false;
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadLevelsAndUnlockStatus();
-    // Ensure ambient music is playing (resume if paused during navigation)
-    SoundManager().ensureAmbientMusicPlaying();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Subscribe to RouteObserver to detect when routes are popped back to this screen
-    routeObserver.subscribe(this, ModalRoute.of(context)!);
-    // Resume ambient music when returning to this screen
-    SoundManager().ensureAmbientMusicPlaying();
-  }
-
-  @override
-  void dispose() {
-    routeObserver.unsubscribe(this);
-    super.dispose();
-  }
-
-  @override
-  void didPopNext() {
-    // Called when a route is popped and this screen becomes visible again
-    // This is the reliable way to refresh data after returning from game
-    _loadLevelsAndUnlockStatus();
-  }
-
-  Future<void> _loadLevelsAndUnlockStatus() async {
-    final easyShapesLevel = await ProgressRepository.getLastUnlockedLevel(GameMode.shapes, Difficulty.easy);
-    final easyPlanetsLevel = await ProgressRepository.getLastUnlockedLevel(GameMode.planets, Difficulty.easy);
-    final easyCosmicLevel = await ProgressRepository.getLastUnlockedLevel(GameMode.cosmic, Difficulty.easy);
-    final mediumLevel = await ProgressRepository.getLastUnlockedLevel(_defaultMode, Difficulty.medium);
-    final hardLevel = await ProgressRepository.getLastUnlockedLevel(_defaultMode, Difficulty.hard);
-    final expertLevel = await ProgressRepository.getLastUnlockedLevel(_defaultMode, Difficulty.expert);
-    final masterLevel = await ProgressRepository.getLastUnlockedLevel(_defaultMode, Difficulty.master);
-    final bool expertUnlocked = true; // Expert is always unlocked
-    final masterUnlocked = await ProgressRepository.isDifficultyUnlocked(_defaultMode, Difficulty.master);
-    
-    if (mounted) {
-      setState(() {
-        _easyShapesLevel = easyShapesLevel;
-        _easyPlanetsLevel = easyPlanetsLevel;
-        _easyCosmicLevel = easyCosmicLevel;
-        _mediumLevel = mediumLevel;
-        _hardLevel = hardLevel;
-        _expertLevel = expertLevel;
-        _masterLevel = masterLevel;
-        _expertUnlocked = expertUnlocked;
-        _masterUnlocked = masterUnlocked;
-        _isLoading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('CRAZY SUDOKU')),
-      body: Stack(
-        children: [
-          const StarryBackground(),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : ListView(
-            padding: const EdgeInsets.all(24),
-            children: [
-              StaggeredSlideFade(
-                key: const ValueKey('crazy_easy'),
-                delay: const Duration(milliseconds: 100),
-                child: _DifficultyCard(
-                  title: 'EASY',
-                  description: '6x6 - Shapes / Planets / Cosmic / Custom',
-                  difficulty: Difficulty.easy,
-                  color: kCosmicPrimary,
-                  isLocked: false,
-                  onTap: () {
-                    SoundManager().playClick();
-                    GlassModal.show(
-                      context: context,
-                      title: 'CHOOSE TYPE',
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildTypeOption(
-                            context,
-                            'SHAPES (6x6)',
-                            () {
-                              Navigator.pop(context);
-                              _startOrContinueGame(context, GameMode.shapes, Difficulty.easy);
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          _buildTypeOption(
-                            context,
-                            'PLANETS (6x6)',
-                            () {
-                              Navigator.pop(context);
-                              _startOrContinueGame(context, GameMode.planets, Difficulty.easy);
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          _buildTypeOption(
-                            context,
-                            'COSMIC (6x6)',
-                            () {
-                              Navigator.pop(context);
-                              _startOrContinueGame(context, GameMode.cosmic, Difficulty.easy);
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          _buildTypeOption(
-                            context,
-                            'CUSTOM (6x6)',
-                            () async {
-                              Navigator.pop(context);
-                              final images = await CustomImageRepository.loadCustomImages();
-                              final bool allSet = images.every((path) => path != null);
-                              if (context.mounted) {
-                                if (allSet) {
-                                  _startOrContinueGame(context, GameMode.custom, Difficulty.easy);
-                                } else {
-                                  Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomImageSetupScreen()));
-                                }
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('crazy_medium_${_mediumLevel ?? 0}'),
-                delay: const Duration(milliseconds: 200),
-                child: _DifficultyCard(
-                  title: 'MEDIUM',
-                  description: '6x6 - Shapes & Colors',
-                  difficulty: Difficulty.medium,
-                  color: kCosmicPrimary,
-                  currentLevel: _mediumLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, GameMode.shapes, Difficulty.medium),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('crazy_hard_${_hardLevel ?? 0}'),
-                delay: const Duration(milliseconds: 300),
-                child: _DifficultyCard(
-                  title: 'HARD',
-                  description: '6x6 - Shapes, Colors & Numbers',
-                  difficulty: Difficulty.hard,
-                  color: kCosmicPrimary,
-                  currentLevel: _hardLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, GameMode.shapes, Difficulty.hard),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('crazy_expert_${_expertLevel ?? 0}'),
-                delay: const Duration(milliseconds: 400),
-                child: _DifficultyCard(
-                  title: 'EXPERT',
-                  description: '9x9 - Shapes, Colors & Numbers',
-                  difficulty: Difficulty.expert,
-                  color: kCosmicPrimary,
-                  currentLevel: _expertLevel,
-                  isLocked: false,
-                  onTap: () => _startOrContinueGame(context, GameMode.shapes, Difficulty.expert),
-                ),
-              ),
-              const SizedBox(height: 16),
-              StaggeredSlideFade(
-                key: ValueKey('crazy_master_${_masterLevel ?? 0}'),
-                delay: const Duration(milliseconds: 500),
-                child: _DifficultyCard(
-                  title: 'MASTER',
-                  description: '9x9 - Shapes, Colors & Numbers',
-                  difficulty: Difficulty.master,
-                  color: kCosmicPrimary,
-                  currentLevel: _masterUnlocked ? _masterLevel : null,
-                  isLocked: !_masterUnlocked,
-                  onTap: _masterUnlocked
-                      ? () => _startOrContinueGame(context, GameMode.shapes, Difficulty.master)
-                      : () => _showUnlockMessage(context, 'Master', 'Need to complete 3 levels of Expert to open this'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTypeOption(BuildContext context, String label, VoidCallback onTap) {
-    return AnimatedButton(
-      onTap: () {
-        SoundManager().playClick();
-        onTap();
-      },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              kCosmicPrimary.withOpacity(0.1),
-              Colors.transparent,
-            ],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: kCosmicPrimary.withOpacity(0.4), width: 1.5),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontFamily: 'Rajdhani',
-            fontSize: 16,
-            color: kCosmicText,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
-  }
-
-  void _showUnlockMessage(BuildContext context, String difficulty, String message) {
-    showCosmicSnackbar(context, message);
-  }
-
-  void _startOrContinueGame(BuildContext context, GameMode mode, Difficulty diff) async {
-    final savedGame = await CurrentGameRepository.loadGame(mode, diff);
-    if (savedGame != null && context.mounted) {
-      GlassModal.show(
-        context: context,
-        title: 'RESUME GAME?',
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Time: ${_formatTime(savedGame.elapsedSeconds)}',
-              style: const TextStyle(
-                fontFamily: 'Rajdhani',
-                fontSize: 18,
-                color: kCosmicText,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Column(
-              children: [
-                CosmicButton(
-                  text: 'CONTINUE',
-                  icon: Icons.play_arrow,
-                  onPressed: () {
-                    Navigator.pop(context);
-                    SoundManager().stopAmbientMusic();
-                    SoundManager().playGameStart();
-                    if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen.resume(savedGame: savedGame))).then((_) => _loadLevelsAndUnlockStatus());
-                  },
-                ),
-                const SizedBox(height: 12),
-                CosmicButton(
-                  text: 'RESTART',
-                  icon: Icons.refresh,
-                  type: CosmicButtonType.secondary,
-                  onPressed: () async {
-                     Navigator.pop(context);
-                     await CurrentGameRepository.clearGame(mode, diff);
-                     if (context.mounted) {
-                         SoundManager().stopAmbientMusic();
-                       SoundManager().playGameStart();
-                       if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-                       // Start new game at the current unlocked level (not the saved game level)
-                       final int currentLevel = await ProgressRepository.getLastUnlockedLevel(mode, diff);
-                       Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(
-                         levelNumber: currentLevel,
-                         mode: mode,
-                         difficulty: diff,
-                         sudokuSize: savedGame.mode == GameMode.numbers && (mode == GameMode.numbers) ? (savedGame.board.length == 6 ? SudokuSize.mini : SudokuSize.standard) : null,
-                       ))).then((_) => _loadLevelsAndUnlockStatus());
-                     }
-                  },
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    } else {
-      if (context.mounted) {
-          SoundManager().stopAmbientMusic();
-        SoundManager().playGameStart();
-        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
-        _startNewGame(context, mode, diff);
-      }
-    }
-  }
-
-  void _startNewGame(BuildContext context, GameMode mode, Difficulty diff) async {
-    final int level = await ProgressRepository.getLastUnlockedLevel(mode, diff);
-    if (context.mounted) {
-      SoundManager().stopAmbientMusic();
-      Navigator.push(context, MaterialPageRoute(builder: (_) => GameScreen(levelNumber: level, mode: mode, difficulty: diff))).then((_) => _loadLevelsAndUnlockStatus());
-    }
   }
 }
 
@@ -1774,8 +1391,8 @@ class _DifficultyCardState extends State<_DifficultyCard> {
       shouldShake: _shouldShake,
       child: AnimatedButton(
         onTap: widget.isLocked ? () {
-        SoundManager().playLocked();
-        if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+          SoundManager().playLocked();
+          if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
           setState(() {
             _shouldShake = true;
           });
@@ -1786,87 +1403,102 @@ class _DifficultyCardState extends State<_DifficultyCard> {
               });
             }
           });
-          // Call parent onTap to show snackbar message
           widget.onTap();
-      } : () {
-        SoundManager().playClick();
-        if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
+        } : () {
+          SoundManager().playClick();
+          if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
           widget.onTap();
-      },
-      enabled: true,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              effectiveColor.withOpacity(widget.isLocked ? 0.1 : 0.15),
-              effectiveColor.withOpacity(widget.isLocked ? 0.05 : 0.1),
-              Colors.transparent,
+        },
+        enabled: true,
+        child: Container(
+          decoration: BoxDecoration(
+            // Outer glow/shadow
+            boxShadow: [
+              BoxShadow(
+                color: effectiveColor.withOpacity(widget.isLocked ? 0.05 : 0.2),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
             ],
           ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: effectiveColor.withOpacity(widget.isLocked ? 0.3 : 0.6),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: effectiveColor.withOpacity(widget.isLocked ? 0.1 : 0.3),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
+          child: Stack(
+            children: [
+              // 1. Blur Effect (Glass)
+              ClipRRect(
                 borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                children: [
-                  widget.difficulty != null
-                      ? _buildDifficultyIconWidget(widget.difficulty!, effectiveColor.withOpacity(opacity), 24)
-                      : Icon(widget.icon!, size: 24, color: effectiveColor.withOpacity(opacity)),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                              effectiveColor.withOpacity(widget.isLocked ? 0.05 : 0.2),
+                              effectiveColor.withOpacity(widget.isLocked ? 0.02 : 0.1),
+                        ],
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    child: Row(
                       children: [
-                        Text(
-                          displayTitle,
-                          style: TextStyle(
-                            fontFamily: 'Orbitron',
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: widget.isLocked ? kCosmicTextSecondary.withOpacity(0.7) : kCosmicText,
+                        widget.difficulty != null
+                            ? _buildDifficultyIconWidget(widget.difficulty!, effectiveColor.withOpacity(opacity), 24)
+                            : Icon(widget.icon!, size: 24, color: effectiveColor.withOpacity(opacity)),
+                        const SizedBox(width: 20),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                displayTitle,
+                                style: TextStyle(
+                                  fontFamily: 'Orbitron',
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: widget.isLocked ? kCosmicTextSecondary.withOpacity(0.7) : kCosmicText,
+                                  shadows: widget.isLocked ? null : [
+                                    Shadow(
+                                      color: Colors.black.withOpacity(0.3),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                widget.description,
+                                style: TextStyle(
+                                  fontFamily: 'Rajdhani',
+                                  fontSize: 12,
+                                  color: widget.isLocked ? kCosmicTextSecondary.withOpacity(0.5) : kCosmicTextSecondary,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          widget.description,
-                          style: TextStyle(
-                            fontFamily: 'Rajdhani',
-                            fontSize: 12,
-                            color: widget.isLocked ? kCosmicTextSecondary.withOpacity(0.5) : kCosmicTextSecondary,
-                          ),
-                        ),
+                        if (widget.isLocked)
+                          Icon(Icons.lock, color: effectiveColor.withOpacity(opacity), size: 20)
+                        else
+                          Icon(Icons.arrow_forward_ios, color: effectiveColor.withOpacity(opacity), size: 16),
                       ],
                     ),
                   ),
-                  if (widget.isLocked)
-                    Icon(Icons.lock, color: effectiveColor.withOpacity(opacity), size: 20)
-                  else
-                    Icon(Icons.arrow_forward_ios, color: effectiveColor.withOpacity(opacity), size: 16),
-                ],
+                ),
               ),
+
+              // 2. Inner Shadows & Highlights (Custom Painter)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: GlassBevelPainter(
+                    borderRadius: BorderRadius.circular(20),
+                    borderColor: effectiveColor.withOpacity(widget.isLocked ? 0.2 : 0.5),
+                    isPressed: false, // Difficulty card doesn't track press state visually in the same way via painter yet
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -1875,99 +1507,7 @@ class _DifficultyCardState extends State<_DifficultyCard> {
 }
 
 // ... CustomImageSetupScreen ...
-class CustomImageSetupScreen extends StatefulWidget {
-  const CustomImageSetupScreen({super.key});
-  @override
-  State<CustomImageSetupScreen> createState() => _CustomImageSetupScreenState();
-}
 
-class _CustomImageSetupScreenState extends State<CustomImageSetupScreen> {
-  final List<String?> _imagePaths = List.filled(9, null); 
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadImages();
-  }
-
-  Future<void> _loadImages() async {
-    final loaded = await CustomImageRepository.loadCustomImages();
-    setState(() {
-      for(int i=0; i<loaded.length; i++) {
-        if(i < 9) _imagePaths[i] = loaded[i];
-      }
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _pickImage(int index) async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-    if (image != null) {
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName = 'custom_icon_${index + 1}.png';
-      final File localImage = await File(image.path).copy('${appDir.path}/$fileName');
-      setState(() { _imagePaths[index] = localImage.path; });
-      await CustomImageRepository.saveCustomImage(index, localImage.path);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final allSelected = _imagePaths.every((p) => p != null);
-    return Scaffold(
-      appBar: AppBar(title: const Text("CUSTOM MODE SETUP")),
-      body: Stack(
-        children: [
-          const StarryBackground(),
-          _isLoading ? const Center(child: CircularProgressIndicator()) : Column(
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text("Select an image for each number (1-9).", textAlign: TextAlign.center),
-              ),
-              Expanded(
-                child: GridView.builder(
-                  padding: const EdgeInsets.all(16),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3, crossAxisSpacing: 12, mainAxisSpacing: 12,
-                  ),
-                  itemCount: 9,
-                  itemBuilder: (context, index) {
-                    final path = _imagePaths[index];
-                    return InkWell(
-                      onTap: () => _pickImage(index),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: kRetroSurface,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: kRetroText.withOpacity(0.5)),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: path != null
-                            ? Image.file(File(path), fit: BoxFit.cover)
-                            : const Center(child: Icon(Icons.add, color: kRetroText)),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: ElevatedButton(
-                  onPressed: allSelected ? () => Navigator.pop(context) : null,
-                  style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-                  child: const Text("SAVE & CONTINUE"),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 
 class ProgressRepository {
@@ -1990,7 +1530,7 @@ class ProgressRepository {
   }
 
   static Future<int> getLastUnlockedLevel(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
-    for (int i = 1; i <= 50; i++) {
+    for (int i = 1; i <= StatsRepository.levelsPerDifficulty; i++) {
       final status = await getLevelStatus(i, mode, difficulty, size: size);
       if (status == LevelStatus.locked) {
         return math.max(1, i - 1);
@@ -1999,7 +1539,7 @@ class ProgressRepository {
         return i;
       }
     }
-    return 50;
+    return StatsRepository.levelsPerDifficulty;
   }
 
   static Future<void> completeLevel(int level, GameMode mode, Difficulty difficulty, int stars, int timeSeconds, int mistakes, {SudokuSize? size}) async {
@@ -2022,7 +1562,7 @@ class ProgressRepository {
   static Future<int> getCompletedLevelsCount(GameMode mode, Difficulty difficulty, {SudokuSize? size}) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     int count = 0;
-    for (int i = 1; i <= 50; i++) {
+    for (int i = 1; i <= StatsRepository.levelsPerDifficulty; i++) {
       final String key = '${_prefix(mode, difficulty, size: size)}$i';
       if (prefs.getString(key) == 'completed') count++;
     }
@@ -2058,11 +1598,7 @@ class GameStateData {
   final List<List<Set<int>>> notes;
   final int mistakes;
   final int elapsedSeconds;
-  // Combined mode notes (for medium/hard/expert/master)
-  final List<List<Set<int>>>? shapeNotes;
-  final List<List<Set<int>>>? colorNotes;
-  final List<List<Set<int>>>? numberNotes;
-  final List<List<ElementType?>>? pencilNoteType;
+
 
   GameStateData({
     required this.mode,
@@ -2072,10 +1608,6 @@ class GameStateData {
     required this.notes,
     required this.mistakes,
     required this.elapsedSeconds,
-    this.shapeNotes,
-    this.colorNotes,
-    this.numberNotes,
-    this.pencilNoteType,
   });
 
   Map<String, dynamic> toJson() => {
@@ -2130,22 +1662,19 @@ class GameScreen extends StatefulWidget {
     required this.mode,
     required this.difficulty,
     this.initialState,
-    this.sudokuSize,
   });
 
   final int levelNumber;
   final GameMode mode;
   final Difficulty difficulty;
   final GameStateData? initialState;
-  final SudokuSize? sudokuSize; // For Classic Sudoku: mini (6x6) or standard (9x9)
 
-  factory GameScreen.resume({required GameStateData savedGame, SudokuSize? sudokuSize}) {
+  factory GameScreen.resume({required GameStateData savedGame}) {
     return GameScreen(
       levelNumber: savedGame.levelNumber,
       mode: savedGame.mode,
       difficulty: savedGame.difficulty,
       initialState: savedGame,
-      sudokuSize: sudokuSize,
     );
   }
 
@@ -2157,17 +1686,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   late List<List<int>> _board;
   late List<List<bool>> _isEditable;
   late List<List<Set<int>>> _notes;
-  // Medium mode separate notes
-  late List<List<Set<int>>> _shapeNotes;
-  late List<List<Set<int>>> _colorNotes;
-  late List<List<Set<int>>> _numberNotes;
-  // Track which element type has pencil notes per cell (null = no notes yet)
-  late List<List<ElementType?>> _pencilNoteType;
   late SudokuPuzzle? _sudokuPuzzle;
-  CombinedPuzzle? _combinedPuzzle;
-  
-  // Medium Combined Draft
-  CombinedCell? _draftCell; 
   
   int? _selectedRow;
   int? _selectedCol;
@@ -2177,13 +1696,15 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   late Stopwatch _stopwatch;
   late int _elapsed;
   late AnimationController _rotationController;
-  late AnimationController _completionController;
+    // 4. Game Screen State Updates
+    late AnimationController _startupController;
+    late AnimationController _completionController;
   late AnimationController _groupCompletionController;
   late AnimationController _gridAnimationController;
   late AnimationController _numbersFadeController;
   late AnimationController _winAnimationController;
   late AnimationController _lineCompletionController;
-  late AnimationController _glitterController;
+  // late AnimationController _glitterController; // Removed
   int? _completedRow;
   int? _completedCol;
   int? _triggerRow;
@@ -2204,32 +1725,40 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   
   bool _pencilMode = false;
   int _mistakes = 0;
-  static const int _maxMistakes = 4;
+  late int _maxMistakes;
   final List<GameStateData> _history = [];
   
-  // Hint tracking for Crazy Sudoku
+  // Hint tracking
   int _hintsRemaining = 0;
   int _maxHints = 0;
 
-  // Track which elements the user has filled per cell for combined modes
-  // Key: "row_col", Value: Set of ElementTypes the user has filled
-  Map<String, Set<ElementType>> _userFilledElements = {};
-
-  late List<int> _shapeMap;
   HintInfo? _activeHint;
-  // Store current hint element type for apply action
-  ElementType? _activeHintElementType;
 
   // Debug toolbar state
-  bool _showDebugToolbar = true; // DEBUG: Enabled for testing
+  bool _isLoading = true; // Add loading state
 
-  @override
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeGridSize();
     _initializeHintCounter();
+
+    // Initialize Max Mistakes based on difficulty
+    switch (widget.difficulty) {
+      case Difficulty.easy:
+      case Difficulty.medium:
+        _maxMistakes = 3;
+        break;
+      case Difficulty.hard:
+      case Difficulty.expert:
+        _maxMistakes = 2;
+        break;
+      case Difficulty.master:
+        _maxMistakes = 1;
+        break;
+    }
+
     _stopwatch = Stopwatch();
     _elapsed = widget.initialState?.elapsedSeconds ?? 0;
     
@@ -2263,6 +1792,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       duration: const Duration(seconds: 2),
     );
 
+    // Cosmic Startup Master Controller
+    _startupController = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 1650), // ANIMATION: 1.65 SECONDS
+    );
+     
     _lineCompletionController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200), // Slower wave
@@ -2280,64 +1815,43 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       }
     });
 
-    _glitterController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 3000), // Longer, more visible
-    );
 
-    final allShapes = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-    if (_gridSize == 6) {
-      allShapes.shuffle(math.Random(widget.levelNumber));
-      _shapeMap = allShapes.take(6).toList();
-    } else {
-      _shapeMap = allShapes;
-    }
 
-    _initializeGame();
-    
-    // Check if the game is already completed (e.g. resumed from a finished state)
-    // This handles the bug where resuming a finished game doesn't trigger win
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_isBoardSolved()) {
+    _initializeGame().catchError((error) {
+      debugPrint("Error initializing game: $error");
+    }).then((_) {
+      // Check if the game is already completed AFTER board is initialized
+      if (mounted && _isBoardSolved()) {
         // Game is already completed (resumed from finished state).
         // Skip win animation and go directly to next level.
         if (widget.levelNumber >= 50) {
           // Max level reached, just exit to menu
-          if (mounted) Navigator.pop(context);
+          Navigator.pop(context);
         } else {
           // Go to next level
-          if (mounted) {
-             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
-              levelNumber: widget.levelNumber + 1, 
-              mode: widget.mode,
-              difficulty: widget.difficulty,
-              sudokuSize: widget.sudokuSize,
-            )));
-          }
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
+            levelNumber: widget.levelNumber + 1, 
+            mode: widget.mode,
+            difficulty: widget.difficulty,
+          )));
         }
       }
     });
     
-    // Start grid drawing animation
-    _gridAnimationController.forward().then((_) {
-      // After grid is drawn, fade in numbers
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) {
-          _numbersFadeController.forward();
-          
-          // Start glitter animation
-          _glitterController.forward().then((_) {
-             if (mounted) {
-               _stopwatch.start();
-               // setState(() => _glitterCells.clear()); // No longer needed
-             }
-          });
-          
-          // No periodic timer needed for number scaling animation
-          // The controller value itself will drive the scale/flash
-        }
-      });
-    });
+    
+    // Start STARTUP SEQUENCE (Animation: 1.65s, Timer start: 2.0s)
+    if (_elapsed == 0) { // Only animate on fresh start
+        _startupController.forward().whenComplete(() {
+            // Animation done at 1.65s, wait until 2.0s to start timer
+            Future.delayed(const Duration(milliseconds: 350), () {
+              if (mounted && !_stopwatch.isRunning) _stopwatch.start();
+            });
+        });
+    } else {
+        // Resume immediate
+        _startupController.value = 1.0; 
+        _stopwatch.start();
+    }
     
     // Timer starts after animation now
     Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -2355,158 +1869,58 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   }
 
   void _initializeGridSize() {
-    // For Classic Sudoku (Numbers mode): use sudokuSize to determine grid
-    if (widget.mode == GameMode.numbers && widget.sudokuSize != null) {
-      if (widget.sudokuSize == SudokuSize.mini) {
-        _gridSize = 6;
-        _blockRows = 2;
-        _blockCols = 3;
-      } else {
-        _gridSize = 9;
-        _blockRows = 3;
-        _blockCols = 3;
-      }
-      return;
-    }
-    
-    // Determine if this is a Crazy Sudoku mode (combined shapes/colors)
-    final bool isCrazySudoku = widget.mode != GameMode.numbers && 
-                                widget.mode != GameMode.custom;
-    
-    if (widget.difficulty == Difficulty.easy) {
-      // Easy: Always 6x6
-      _gridSize = 6;
-      _blockRows = 2;
-      _blockCols = 3;
-    } else if (isCrazySudoku && (widget.difficulty == Difficulty.medium || 
-                                 widget.difficulty == Difficulty.hard)) {
-      // Crazy Sudoku Medium & Hard: 6x6
-      _gridSize = 6;
-      _blockRows = 2;
-      _blockCols = 3;
-    } else {
-      // Standard Sudoku Medium/Hard/Expert/Master OR Crazy Sudoku Expert/Master: 9x9
-      _gridSize = 9;
-      _blockRows = 3;
-      _blockCols = 3;
-    }
+    // Hardcoded for Mini Sudoku (6x6)
+    _gridSize = 6;
+    _blockRows = 2;
+    _blockCols = 3;
   }
 
   void _initializeHintCounter() {
-    final bool isCrazySudoku = widget.mode != GameMode.numbers && 
-                                widget.mode != GameMode.custom;
-    
-    if (!isCrazySudoku) {
-      // Standard Sudoku: 3 hints per level
-      _maxHints = 3;
-    } else if (widget.difficulty == Difficulty.easy || widget.difficulty == Difficulty.medium) {
-      // 2-element modes (shape + color): 6 hints
-      _maxHints = 6;
-    } else {
-      // 3-element modes (shape + color + number): 9 hints
-      _maxHints = 9;
-    }
+    _maxHints = 3;
     _hintsRemaining = _maxHints;
   }
 
-  void _initializeGame() {
-    _generateLevelLogic();
+  Future<void> _initializeGame() async {
+    await _generateLevelLogic();
 
-    if (widget.initialState != null) {
-      _board = List.generate(_gridSize, (r) => List.from(widget.initialState!.board[r]));
-      _notes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => Set<int>.from(widget.initialState!.notes[r][c])));
-      _mistakes = widget.initialState!.mistakes;
-    } else {
+    if (!mounted) return;
+    setState(() {
+      if (widget.initialState != null) {
+        _board = List.generate(_gridSize, (r) => List.from(widget.initialState!.board[r]));
+        _notes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => Set<int>.from(widget.initialState!.notes[r][c])));
+        _mistakes = widget.initialState!.mistakes;
+      } else {
       _notes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => {}));
       _mistakes = 0;
     }
     
-    // Initialize Medium mode separate notes
-    _shapeNotes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => <int>{}));
-    _colorNotes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => <int>{}));
-    _numberNotes = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => <int>{}));
-    // Initialize pencil note type lock
-    _pencilNoteType = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => null));
+    _isLoading = false;
+    });
   }
 
-  void _generateLevelLogic() {
-    // Medium, Hard, Expert, and Master modes use CombinedPuzzleGenerator for shapes/colors modes
-    if ((widget.difficulty == Difficulty.medium || 
-         widget.difficulty == Difficulty.hard ||
-         widget.difficulty == Difficulty.expert ||
-         widget.difficulty == Difficulty.master) && 
-        widget.mode != GameMode.numbers && 
-        widget.mode != GameMode.planets &&
-        widget.mode != GameMode.custom &&
-        widget.mode != GameMode.cosmic) {
-       
-       final generator = CombinedPuzzleGenerator(
-         widget.levelNumber, 
-         widget.difficulty.index,
-         gridSize: _gridSize,
-         subgridRowSize: _blockRows,
-         subgridColSize: _blockCols,
-       );
-       _combinedPuzzle = generator.generateCombined();
-       
-       if (widget.initialState == null) {
-         _board = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => 0));
-       }
-       
-       _isEditable = List.generate(_gridSize, (r) => List.generate(_gridSize, (c) => false));
-       
-       for (int r = 0; r < _gridSize; r++) {
-         for (int c = 0; c < _gridSize; c++) {
-            final cell = _combinedPuzzle!.initialBoard[r][c];
-            bool isFixed = cell.isFixed;
-               if (widget.initialState == null) {
-                  _board[r][c] = isFixed ? 1 : 0; // Prefill fixed cells
-               }
-               _isEditable[r][c] = !isFixed; // Only non-fixed cells are editable
-         }
-       }
-       _sudokuPuzzle = null;
-    } else {
-       // Easy mode, custom mode, and other non-combined modes
-       
-       // For Numbers mode (Classic Sudoku): use pre-generated puzzles from ClassicPuzzles
-       if (widget.mode == GameMode.numbers) {
-         final size = widget.sudokuSize ?? SudokuSize.mini;
-         _sudokuPuzzle = ClassicPuzzles.getPuzzle(size, widget.difficulty, widget.levelNumber);
-       } else {
-         // For other modes: use LevelGenerator
-         // For Easy mode: route odd levels to planets, even levels to cosmic
-         int modeIndex = widget.mode.index;
-         if (widget.difficulty == Difficulty.easy && 
-             (widget.mode == GameMode.planets || widget.mode == GameMode.cosmic)) {
-           // Use planets for odd levels, cosmic for even levels
-           modeIndex = (widget.levelNumber % 2 == 1) ? GameMode.planets.index : GameMode.cosmic.index;
-         }
-         
-         final generator = LevelGenerator(
-           widget.levelNumber, 
-           modeIndex,
-           gridSize: _gridSize,
-           subgridRowSize: _blockRows,
-           subgridColSize: _blockCols,
-         );
-         _sudokuPuzzle = generator.generate();
-       }
-       
-       // Initialize board with prefilled cells from the generated puzzle
-       if (widget.initialState == null) {
-         _board = List.generate(_gridSize, (i) => List.from(_sudokuPuzzle!.initialBoard[i]));
-       }
-       
-       _isEditable = List.generate(
-         _gridSize,
-         (r) => List.generate(_gridSize, (c) => _sudokuPuzzle!.initialBoard[r][c] == 0),
-       );
-       _combinedPuzzle = null;
-    }
+  Future<void> _generateLevelLogic() async {
+     await Future.microtask(() {}); // Ensure async behavior consistency
+
+     // For Numbers mode (Classic Sudoku): use pre-generated puzzles from ClassicPuzzles
+     // Hardcode size to mini (6x6)
+     _sudokuPuzzle = ClassicPuzzles.getPuzzle(SudokuSize.mini, widget.difficulty, widget.levelNumber);
+     
+     // Initialize board with prefilled cells from the generated puzzle
+     if (widget.initialState == null) {
+       _board = List.generate(_gridSize, (i) => List.from(_sudokuPuzzle!.initialBoard[i]));
+     }
+     
+     _isEditable = List.generate(
+       _gridSize,
+       (r) => List.generate(_gridSize, (c) => _sudokuPuzzle!.initialBoard[r][c] == 0),
+     );
+
   }
 
   Future<void> _saveGameState() async {
+    // Prevent saving if game is already won/completed
+    if (!mounted || _isBoardSolved()) return;
+
     // Skip save for Hard, Expert, Master modes (arcade style)
     // Save allowed for all modes now (Resume Game feature)
     // if (widget.difficulty == Difficulty.hard || widget.difficulty == Difficulty.expert || widget.difficulty == Difficulty.master) return;
@@ -2541,7 +1955,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     _numbersFadeController.dispose();
     _winAnimationController.dispose();
     _lineCompletionController.dispose();
-    _glitterController.dispose();
+
     // Only resume ambient music if we're actually returning to menu
     // (not when going to next level - that's handled by completion dialog)
     // Check if we're being popped (returning to menu) vs replaced (going to next level)
@@ -2553,31 +1967,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     if (_winAnimationController.isAnimating) return;
     
     setState(() {
-      // If moving to a different cell, clear the draft of the previous cell
-      if (_selectedRow != row || _selectedCol != col) {
-        if ((widget.difficulty == Difficulty.medium || 
-             widget.difficulty == Difficulty.hard ||
-             widget.difficulty == Difficulty.expert ||
-             widget.difficulty == Difficulty.master) && widget.mode != GameMode.numbers) {
-          _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-        }
-      }
-
       _selectedRow = row;
       _selectedCol = col;
       _highlightedNumber = null; // Clear highlight on new selection
     });
-    // SoundManager().playClick(); // Removed to prevent confusion with success haptic
   }
+
   void _pushHistory() {
-    // Enable history for all modes and difficulties
-    
-    final bool isCombinedMode = (widget.difficulty == Difficulty.medium || 
-                                  widget.difficulty == Difficulty.hard ||
-                                  widget.difficulty == Difficulty.expert ||
-                                  widget.difficulty == Difficulty.master) && 
-                                 widget.mode != GameMode.numbers;
-    
     _history.add(GameStateData(
       mode: widget.mode,
       difficulty: widget.difficulty,
@@ -2586,10 +1982,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       notes: List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(_notes[i][j]))),
       mistakes: _mistakes,
       elapsedSeconds: _elapsed,
-      shapeNotes: isCombinedMode ? List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(_shapeNotes[i][j]))) : null,
-      colorNotes: isCombinedMode ? List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(_colorNotes[i][j]))) : null,
-      numberNotes: isCombinedMode ? List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(_numberNotes[i][j]))) : null,
-      pencilNoteType: isCombinedMode ? List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => _pencilNoteType[i][j])) : null,
     ));
     if (_history.length > 20) _history.removeAt(0); 
   }
@@ -2602,216 +1994,24 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     });
   }
 
-  void _handleInput(int value, {ElementType? type}) {
+  void _handleInput(int value) {
     if (_selectedRow == null || _selectedCol == null) return;
     if (!_isEditable[_selectedRow!][_selectedCol!]) return;
 
-    // Combined Mode Logic (Easy with shapes/colors, Medium, Hard, Expert, Master)
-    final bool isEasyCombined = widget.difficulty == Difficulty.easy && 
-                                widget.mode != GameMode.numbers && 
-                                widget.mode != GameMode.custom &&
-                                _combinedPuzzle != null;
-    final bool isMediumPlus = (widget.difficulty == Difficulty.medium || 
-                               widget.difficulty == Difficulty.hard ||
-                               widget.difficulty == Difficulty.expert ||
-                               widget.difficulty == Difficulty.master) && 
-                              widget.mode != GameMode.numbers;
-    
-    if (isEasyCombined || isMediumPlus) {
-       if (type == null) return;
-       
-       final bool isEasy = widget.difficulty == Difficulty.easy;
-       final bool isMedium = widget.difficulty == Difficulty.medium;
-       
-       // Block number input for Easy and Medium
-       if ((isEasy || isMedium) && type == ElementType.number) {
-         return; // Block number input for Easy and Medium
-       }
-       
-       // Pencil Mode
-       if (_pencilMode) {
-         _pushHistory();
-         setState(() {
-           // Get the appropriate notes set based on type
-           final Set<int> notes;
-           switch(type) {
-             case ElementType.shape: notes = _shapeNotes[_selectedRow!][_selectedCol!]; break;
-             case ElementType.color: notes = _colorNotes[_selectedRow!][_selectedCol!]; break;
-             case ElementType.number: notes = _numberNotes[_selectedRow!][_selectedCol!]; break;
-           }
-           
-           // Toggle the value (add or remove)
-           if (notes.contains(value)) {
-             notes.remove(value);
-           } else {
-             notes.add(value);
-           }
-         });
-         return;
-       }
-       
-       // Normal selection mode
-       _pushHistory();
-       setState(() {
-         _draftCell ??= CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-         
-         // Update draft based on type
-         switch(type) {
-           case ElementType.shape: _draftCell = _draftCell!.copyWith(shapeId: value); break;
-           case ElementType.color: _draftCell = _draftCell!.copyWith(colorId: value); break;
-           case ElementType.number: _draftCell = _draftCell!.copyWith(numberId: value); break;
-         }
-         
-         // Clear pencil notes when making selection
-         _shapeNotes[_selectedRow!][_selectedCol!].clear();
-         _colorNotes[_selectedRow!][_selectedCol!].clear();
-         _numberNotes[_selectedRow!][_selectedCol!].clear();
-         
-        // Validation logic differs by difficulty
-        if (isEasy || isMedium) {
-          // Easy and Medium: Only check shapes and colors (no numbers)
-          if (_draftCell!.shapeId != null && _draftCell!.colorId != null) {
-             final sol = _combinedPuzzle!.solution[_selectedRow!][_selectedCol!];
-             if (_draftCell!.shapeId == sol.shapeId && _draftCell!.colorId == sol.colorId) {
-                // Correct
-                _combinedPuzzle!.initialBoard[_selectedRow!][_selectedCol!] = sol;
-                _board[_selectedRow!][_selectedCol!] = 1; // Mark solved
-                _animatedCells.add(_selectedRow! * _gridSize + _selectedCol!);
-                
-                // Mark all elements as user-filled
-                _markElementFilled(_selectedRow!, _selectedCol!, ElementType.shape);
-                _markElementFilled(_selectedRow!, _selectedCol!, ElementType.color);
-                
-                _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-                
-                if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
-                SoundManager().playSuccessSound();
-                
-                _checkGroupCompletion(_selectedRow!, _selectedCol!);
-                 
-                Future.delayed(const Duration(milliseconds: 500), () {
-                  if (mounted) setState(() => _animatedCells.remove(_selectedRow! * _gridSize + _selectedCol!));
-                });
-
-                if (_isBoardSolved()) _onLevelComplete();
-             } else {
-                _handleMistake();
-                _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-                _errorCells.add(_selectedRow! * _gridSize + _selectedCol!);
-                Future.delayed(const Duration(milliseconds: 1000), () {
-                  if (mounted) setState(() => _errorCells.remove(_selectedRow! * _gridSize + _selectedCol!));
-                });
-             }
-          }
-        } else {
-          // Hard, Expert, Master: Check all three elements
-          if (_draftCell!.shapeId != null && _draftCell!.colorId != null && _draftCell!.numberId != null) {
-             final sol = _combinedPuzzle!.solution[_selectedRow!][_selectedCol!];
-             if (_draftCell!.shapeId == sol.shapeId && _draftCell!.colorId == sol.colorId && _draftCell!.numberId == sol.numberId) {
-                // Correct
-                _combinedPuzzle!.initialBoard[_selectedRow!][_selectedCol!] = sol;
-                _board[_selectedRow!][_selectedCol!] = 1; // Mark solved
-                _animatedCells.add(_selectedRow! * _gridSize + _selectedCol!);
-                
-                // Mark all elements as user-filled
-                _markElementFilled(_selectedRow!, _selectedCol!, ElementType.shape);
-                _markElementFilled(_selectedRow!, _selectedCol!, ElementType.color);
-                _markElementFilled(_selectedRow!, _selectedCol!, ElementType.number);
-                
-                _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-                
-                if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
-                SoundManager().playSuccessSound();
-                
-                _checkGroupCompletion(_selectedRow!, _selectedCol!);
-                 
-                Future.delayed(const Duration(milliseconds: 500), () {
-                  if (mounted) setState(() => _animatedCells.remove(_selectedRow! * _gridSize + _selectedCol!));
-                });
-
-                if (_isBoardSolved()) _onLevelComplete();
-             } else {
-                _handleMistake();
-                _draftCell = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-                _errorCells.add(_selectedRow! * _gridSize + _selectedCol!);
-                Future.delayed(const Duration(milliseconds: 1000), () {
-                  if (mounted) setState(() => _errorCells.remove(_selectedRow! * _gridSize + _selectedCol!));
-                });
-             }
-          }
-        }
-      });
-       return;
-    }
-
     // Pencil Mode
     if (_pencilMode) {
-      // Standard Sudoku (Numbers only)
-      if (widget.mode == GameMode.numbers) {
-        _pushHistory();
-        setState(() {
-          if (_notes[_selectedRow!][_selectedCol!].contains(value)) {
-            _notes[_selectedRow!][_selectedCol!].remove(value);
-          } else {
-            _notes[_selectedRow!][_selectedCol!].add(value);
-          }
-        });
-        return;
-      }
-      
-      // Easy Crazy Sudoku (shapes/colors only, no numbers)
-      if (widget.difficulty == Difficulty.easy && 
-          widget.mode != GameMode.numbers && 
-          widget.mode != GameMode.custom) {
-        _pushHistory();
-        setState(() {
-          if (type == ElementType.shape) {
-            if (_shapeNotes[_selectedRow!][_selectedCol!].contains(value)) {
-              _shapeNotes[_selectedRow!][_selectedCol!].remove(value);
-            } else {
-              _shapeNotes[_selectedRow!][_selectedCol!].add(value);
-            }
-          } else if (type == ElementType.color) {
-            if (_colorNotes[_selectedRow!][_selectedCol!].contains(value)) {
-              _colorNotes[_selectedRow!][_selectedCol!].remove(value);
-            } else {
-              _colorNotes[_selectedRow!][_selectedCol!].add(value);
-            }
-          }
-          // Ignore number input for Easy Crazy Sudoku
-        });
-        return;
-      }
-      
-      // Combined Mode (Shapes, Colors, Numbers)
-      // Allow mixed notes - no blocking based on type
       _pushHistory();
       setState(() {
-        if (type == ElementType.shape) {
-           if (_shapeNotes[_selectedRow!][_selectedCol!].contains(value)) {
-             _shapeNotes[_selectedRow!][_selectedCol!].remove(value);
-           } else {
-             _shapeNotes[_selectedRow!][_selectedCol!].add(value);
-           }
-        } else if (type == ElementType.color) {
-           if (_colorNotes[_selectedRow!][_selectedCol!].contains(value)) {
-             _colorNotes[_selectedRow!][_selectedCol!].remove(value);
-           } else {
-             _colorNotes[_selectedRow!][_selectedCol!].add(value);
-           }
+        if (_notes[_selectedRow!][_selectedCol!].contains(value)) {
+          _notes[_selectedRow!][_selectedCol!].remove(value);
         } else {
-           // Number notes
-           if (_numberNotes[_selectedRow!][_selectedCol!].contains(value)) {
-             _numberNotes[_selectedRow!][_selectedCol!].remove(value);
-           } else {
-             _numberNotes[_selectedRow!][_selectedCol!].add(value);
-           }
+          _notes[_selectedRow!][_selectedCol!].add(value);
         }
       });
       return;
     }
 
-    // Standard Mode
+    // Standard input
     _pushHistory();
     int correctValue = _getCorrectValue(_selectedRow!, _selectedCol!);
     bool isCorrect = (value == correctValue);
@@ -2830,13 +2030,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
           _onLevelComplete();
         }
       } else {
+        if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
         _board[_selectedRow!][_selectedCol!] = value;
         _handleMistake();
         _errorCells.add(_selectedRow! * _gridSize + _selectedCol!);
       }
     });
     
-    // Haptic and sound feedback (outside setState for immediate response)
     if (isCorrect) {
       if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
       SoundManager().playSuccessSound();
@@ -2846,10 +2046,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   }
 
   int _getCorrectValue(int r, int c) {
-    if (_combinedPuzzle != null) {
-        final s = _combinedPuzzle!.solution;
-        return s[r][c].shapeId ?? 0;
-    }
     return _sudokuPuzzle!.solution[r][c];
   }
 
@@ -3047,31 +2243,41 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   void _checkGroupCompletion(int r, int c) {
     // Check Row
     bool rowFull = true;
+    bool rowCorrect = true;
     for(int i=0; i<_gridSize; i++) {
       if(_board[r][i] == 0) rowFull = false;
+      // FIX: Only trigger animation if row is CORRECT
+      if(rowFull && _board[r][i] != _getCorrectValue(r, i)) rowCorrect = false;
     }
     
     // Check Column
     bool colFull = true;
+    bool colCorrect = true;
     for(int i=0; i<_gridSize; i++) {
       if(_board[i][c] == 0) colFull = false;
+      // FIX: Only trigger animation if col is CORRECT
+      if(colFull && _board[i][c] != _getCorrectValue(i, c)) colCorrect = false;
     }
 
     // Check Block
     bool blockFull = true;
+    bool blockCorrect = true;
     int bRowStart = (r ~/ _blockRows) * _blockRows;
     int bColStart = (c ~/ _blockCols) * _blockCols;
     for(int i=0; i<_blockRows; i++) {
       for(int j=0; j<_blockCols; j++) {
         if(_board[bRowStart + i][bColStart + j] == 0) blockFull = false;
+        // FIX: Only trigger animation if block is CORRECT
+        if(blockFull && _board[bRowStart + i][bColStart + j] != _getCorrectValue(bRowStart + i, bColStart + j)) blockCorrect = false;
       }
     }
 
-    if (rowFull || colFull || blockFull) {
+    // Only set the state variables if the group is FULL and CORRECT
+    if ((rowFull && rowCorrect) || (colFull && colCorrect) || (blockFull && blockCorrect)) {
       setState(() {
-        if (rowFull) _completedRow = r;
-        if (colFull) _completedCol = c;
-        if (blockFull) {
+        if (rowFull && rowCorrect) _completedRow = r;
+        if (colFull && colCorrect) _completedCol = c;
+        if (blockFull && blockCorrect) {
           _triggerBlockRow = bRowStart;
           _triggerBlockCol = bColStart;
         }
@@ -3079,36 +2285,18 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         _triggerCol = c;
         _lineCompletionController.forward(from: 0);
       });
-      // Sound placeholder
       SoundManager().playCompletionSound();
       if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
     }
     
-    // Also trigger group completion pulse if needed
-    if (rowFull || colFull || blockFull) {
+    // Pulse animation also conditional on correctness (or just fullness? user said "animations trigger... check correctness")
+    // Assuming pulse should also be for sweet success only
+    if ((rowFull && rowCorrect) || (colFull && colCorrect) || (blockFull && blockCorrect)) {
       _groupCompletionController.forward(from: 0);
     }
   }
 
   bool _isBoardSolved() {
-    // Combined mode validation (Medium, Hard, Expert, Master)
-    if ((widget.difficulty == Difficulty.medium || 
-         widget.difficulty == Difficulty.hard ||
-         widget.difficulty == Difficulty.expert ||
-         widget.difficulty == Difficulty.master) && 
-        widget.mode != GameMode.numbers &&
-        _combinedPuzzle != null) {
-      
-      // Since we mark _board[r][c] = 1 when a cell is correctly solved in combined mode,
-      // we can simply check if the board has any zeros.
-      for(int r=0; r<_gridSize; r++) {
-        for(int c=0; c<_gridSize; c++) {
-          if (_board[r][c] == 0) return false;
-        }
-      }
-      return true;
-    }
-    
     // Standard mode validation
     for(int r=0; r<_gridSize; r++) {
       for(int c=0; c<_gridSize; c++) {
@@ -3128,10 +2316,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
 
   void _onLevelComplete() {
     _stopwatch.stop();
-    SoundManager().stopAmbientMusic(); // Stop music when level completes
     _playWinAnimation();
     CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
-    ProgressRepository.completeLevel(widget.levelNumber, widget.mode, widget.difficulty, 3, _elapsed, _mistakes, size: widget.sudokuSize);
+    ProgressRepository.completeLevel(widget.levelNumber, widget.mode, widget.difficulty, 3, _elapsed, _mistakes);
     
     // Show completion dialog after win animation
     Future.delayed(const Duration(seconds: 2), () {
@@ -3156,21 +2343,28 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
           onNextLevel: () {
             Navigator.pop(context);
             
-            if (widget.levelNumber >= 50) {
+            if (widget.levelNumber >= StatsRepository.levelsPerDifficulty) {
               // Game Finished!
               Navigator.pop(context); // Go back to menu
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Congratulations! You completed all levels for this difficulty!')),
-              );
-              SoundManager().playAmbientMusic();
+              
+              // Show Category Completion Screen
+              Navigator.push(context, MaterialPageRoute(builder: (_) => CategoryCompletionScreen(
+                difficulty: widget.difficulty,
+                onReturnToMenu: () {
+                   Navigator.pop(context); // Pop completion screen
+                },
+              )));
             } else {
               // Navigate to next level without ambient music
               Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
                 levelNumber: widget.levelNumber + 1, 
                 mode: widget.mode,
                 difficulty: widget.difficulty,
-                sudokuSize: widget.sudokuSize,
               )));
+              // Music for next level is handled by the page transition/initState logic if needed,
+              // or we can force it here. Previous code said "Navigate to next level without ambient music"
+              // But we want GAME START music.
+              SoundManager().playGameStart();
             }
           },
           onClose: () {
@@ -3215,32 +2409,101 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   void _onGameOver() {
     _stopwatch.stop();
     CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
-    showDialog(
+    GlassModal.show(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: const Text('GAME OVER', style: TextStyle(color: kRetroError)),
-        content: const Text('Too many mistakes!'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pop(context); 
-            },
-            child: const Text('MENU'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'GAME OVER',
+            style: TextStyle(
+              fontFamily: 'Orbitron',
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: kRetroError, // Red
+              letterSpacing: 1.5,
+            ),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              final int safeLevel = widget.levelNumber.clamp(1, 50);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
-                 levelNumber: safeLevel, 
-                 mode: widget.mode,
-                 difficulty: widget.difficulty,
-                 sudokuSize: widget.sudokuSize,
-              )));
-            },
-            child: const Text('RESTART'),
+          const SizedBox(height: 16),
+          const Text(
+            'Too many mistakes!',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 32),
+          // Actions: Second Chance
+          CosmicButton(
+              text: 'SECOND CHANCE',
+              icon: Icons.replay,
+              type: CosmicButtonType.secondary,
+              onPressed: () {
+                // Revive logic
+                void revive() {
+                    Navigator.pop(context);
+                    setState(() {
+                            _mistakes = _maxMistakes - 1; // Give 1 life back
+                        _stopwatch.start();
+                    });
+                    if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                }
+
+                if (IAPManager.instance.isPremium) {
+                    revive();
+                } else {
+                    AdManager.instance.showRewardedAd(revive);
+                }
+              },
+              height: 56,
+              isFullWidth: true,
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: CosmicButton(
+                  text: 'MENU',
+                  type: CosmicButtonType.secondary,
+                  onPressed: () {
+                    Navigator.pop(context); // Close dialog
+                    Navigator.pop(context); // Go to home
+                  },
+                  height: 56,
+                  isFullWidth: true,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: CosmicButton(
+                  text: 'RESTART',
+                  type: CosmicButtonType.primary,
+                  onPressed: () {
+                    Navigator.pop(context);
+                    final int safeLevel = widget.levelNumber.clamp(1, 50);
+                      if (SettingsController().hapticsEnabled) HapticFeedback.mediumImpact();
+                      
+                      void doRestart() {
+                         SoundManager().playGameStart();
+                         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
+                            levelNumber: safeLevel, 
+                            mode: widget.mode,
+                            difficulty: widget.difficulty,
+                         )));
+                      }
+
+                      if (IAPManager.instance.isPremium) {
+                        doRestart();
+                      } else {
+                        AdManager.instance.showInterstitialAd(onAdClosed: doRestart);
+                      }
+                  },
+                  height: 56,
+                  isFullWidth: true,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -3256,19 +2519,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       // _mistakes = prev.mistakes; // Don't revert mistakes count on undo
       _errorCells.clear();
       
+      // Re-validate the board to identify any persisting errors
+      for (int r = 0; r < _gridSize; r++) {
+         for (int c = 0; c < _gridSize; c++) {
+            if (_board[r][c] != 0 && _board[r][c] != _getCorrectValue(r, c)) {
+               _errorCells.add(r * _gridSize + c);
+            }
+         }
+      }
+      
       // Restore combined mode notes if present
-      if (prev.shapeNotes != null) {
-        _shapeNotes = List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(prev.shapeNotes![i][j])));
-      }
-      if (prev.colorNotes != null) {
-        _colorNotes = List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(prev.colorNotes![i][j])));
-      }
-      if (prev.numberNotes != null) {
-        _numberNotes = List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => Set.from(prev.numberNotes![i][j])));
-      }
-      if (prev.pencilNoteType != null) {
-        _pencilNoteType = List.generate(_gridSize, (i) => List.generate(_gridSize, (j) => prev.pencilNoteType![i][j]));
-      }
     });
   }
 
@@ -3278,26 +2538,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     _pushHistory();
     setState(() {
       _board[_selectedRow!][_selectedCol!] = 0;
-      if ((widget.difficulty == Difficulty.medium || 
-           widget.difficulty == Difficulty.hard ||
-           widget.difficulty == Difficulty.expert ||
-           widget.difficulty == Difficulty.master) && widget.mode != GameMode.numbers) {
-         _draftCell = null;
-         _combinedPuzzle!.initialBoard[_selectedRow!][_selectedCol!] = CombinedCell(shapeId: null, colorId: null, numberId: null, isFixed: false);
-         // Clear all notes
-         _shapeNotes[_selectedRow!][_selectedCol!].clear();
-         _colorNotes[_selectedRow!][_selectedCol!].clear();
-         _numberNotes[_selectedRow!][_selectedCol!].clear();
-         // Clear type lock
-         _pencilNoteType[_selectedRow!][_selectedCol!] = null;
-      } else {
-         _notes[_selectedRow!][_selectedCol!].clear();
-      }
+      _notes[_selectedRow!][_selectedCol!].clear();
       _errorCells.remove(_selectedRow! * _gridSize + _selectedCol!);
     });
   }
 
-  void _hint() {
+  void _hint() async {
     if (_selectedRow == null || _selectedCol == null) {
       if (mounted) {
         showCosmicSnackbar(context, "Please select a cell first to get a hint.");
@@ -3306,537 +2552,79 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     }
     
     final r = _selectedRow!;
-    final c = _selectedCol!;
+    if (_board[r][_selectedCol!] != 0) return;
+
+    // Check Premium status for unlimited hints
+    if (IAPManager.instance.isPremium) {
+      _stopwatch.stop();
+      _showStandardHint(r, _selectedCol!);
+      return;
+    }
     
     // Check hint availability
-    if (_hintsRemaining <= 0) {
-      if (mounted) {
-        showCosmicSnackbar(context, "No hints remaining for this level.");
-      }
-      return;
-    }
-    
-    // Pause timer while hint is active
-    _stopwatch.stop();
-    
-    // Check if selected cell is completely filled
-    if (_board[r][c] != 0 && !_isCellPartiallyFilled(r, c)) {
-      if (mounted) {
-        _stopwatch.start();
-        showCosmicSnackbar(context, "This cell is already filled. Select an empty cell for a hint.");
-      }
-      return;
-    }
-    
-    // Determine if this is Crazy Sudoku combined mode
-    final bool isCrazySudokuCombined = _isCrazySudokuCombinedMode();
-    
-    if (isCrazySudokuCombined) {
-      // Show element selection dialog
-      _showHintElementDialog(r, c);
-    } else if (_isEasyCrazySudoku()) {
-      // Easy Crazy Sudoku: hint for shape/color (no numbers)
-      _showEasyCrazySudokuHint(r, c);
+    if (_hintsRemaining > 0) {
+      _stopwatch.stop();
+      _showStandardHint(r, _selectedCol!);
     } else {
-      // Standard Sudoku: hint for number
-      _showStandardHint(r, c);
-    }
-  }
-
-  bool _isCrazySudokuCombinedMode() {
-    return (widget.difficulty == Difficulty.medium || 
-            widget.difficulty == Difficulty.hard ||
-            widget.difficulty == Difficulty.expert ||
-            widget.difficulty == Difficulty.master) && 
-           widget.mode != GameMode.numbers && 
-           widget.mode != GameMode.custom;
-  }
-
-  bool _isEasyCrazySudoku() {
-    return widget.difficulty == Difficulty.easy && 
-           widget.mode != GameMode.numbers && 
-           widget.mode != GameMode.custom;
-  }
-
-  bool _isCellPartiallyFilled(int r, int c) {
-    if (_combinedPuzzle == null) return false;
-    
-    // Check if user has filled all required elements
-    final key = '${r}_$c';
-    final filled = _userFilledElements[key] ?? <ElementType>{};
-    
-    final bool isMedium = widget.difficulty == Difficulty.medium;
-    final bool isEasy = widget.difficulty == Difficulty.easy;
-    
-    if (isEasy || isMedium) {
-      // Need shape and color
-      return !filled.contains(ElementType.shape) || !filled.contains(ElementType.color);
-    } else {
-      // Need shape, color, and number
-      return !filled.contains(ElementType.shape) || 
-             !filled.contains(ElementType.color) || 
-             !filled.contains(ElementType.number);
-    }
-  }
-  
-  // Check if a specific element has been user-filled for a cell
-  bool _hasUserFilledElement(int r, int c, ElementType type) {
-    final key = '${r}_$c';
-    final filled = _userFilledElements[key] ?? <ElementType>{};
-    return filled.contains(type);
-  }
-  
-  // Mark an element as user-filled for a cell
-  void _markElementFilled(int r, int c, ElementType type) {
-    final key = '${r}_$c';
-    _userFilledElements[key] ??= <ElementType>{};
-    _userFilledElements[key]!.add(type);
-  }
-  
-  // Get all element types that are part of the current game mode
-  List<Map<String, dynamic>> _getElementTypesForMode() {
-    final bool isMedium = widget.difficulty == Difficulty.medium;
-    final bool isEasy = widget.difficulty == Difficulty.easy;
-    
-    List<Map<String, dynamic>> elements = [];
-    
-    // Shape and Color are always available for combination modes
-    elements.add({
-      'type': ElementType.shape,
-      'label': 'Shape',
-      'icon': Icons.category,
-    });
-    elements.add({
-      'type': ElementType.color,
-      'label': 'Color',
-      'icon': Icons.palette,
-    });
-    
-    // Number is available for Hard, Expert, Master
-    if (!isEasy && !isMedium) {
-      elements.add({
-        'type': ElementType.number,
-        'label': 'Number',
-        'icon': Icons.pin,
-      });
-    }
-    
-    return elements;
-  }
-
-  void _showHintElementDialog(int r, int c) {
-    // Get all element types for this game mode
-    final allElements = _getElementTypesForMode();
-    
-    // Filter to elements that haven't been user-filled yet
-    List<Map<String, dynamic>> availableHints = [];
-    for (final element in allElements) {
-      final type = element['type'] as ElementType;
-      if (!_hasUserFilledElement(r, c, type)) {
-        availableHints.add(element);
-      }
-    }
-    
-    if (availableHints.isEmpty) {
-      _stopwatch.start();
-      showCosmicSnackbar(context, "This cell is already complete.");
-      return;
-    }
-    
-    // Show dialog using GlassModal for cosmic theme consistency
-    GlassModal.show(
-      context: context,
-      title: 'CHOOSE HINT TYPE',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'Hints remaining: $_hintsRemaining',
-            style: TextStyle(
-              fontFamily: 'Rajdhani',
-              fontSize: 16,
-              color: kCosmicText.withOpacity(0.7),
-            ),
-          ),
-          const SizedBox(height: 20),
-          ...availableHints.map((hint) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _buildHintTypeOption(
-              icon: hint['icon'] as IconData,
-              label: 'Hint for ${hint['label']}',
-              onTap: () {
-                Navigator.pop(context);
-                _executeElementHint(r, c, hint['type'] as ElementType);
-              },
-            ),
-          )),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _stopwatch.start();
-            },
-            child: Text(
-              'Cancel',
-              style: TextStyle(
-                fontFamily: 'Rajdhani',
-                fontSize: 16,
-                color: kCosmicText.withOpacity(0.7),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _executeElementHint(int r, int c, ElementType elementType) {
-    final sol = _combinedPuzzle!.solution[r][c];
-    
-    // Get the correct value for this element
-    int correctVal;
-    String elementName;
-    switch (elementType) {
-      case ElementType.color:
-        correctVal = sol.colorId!;
-        elementName = 'color';
-        break;
-      case ElementType.shape:
-        correctVal = sol.shapeId!;
-        elementName = 'shape';
-        break;
-      case ElementType.number:
-        correctVal = sol.numberId!;
-        elementName = 'number';
-        break;
-    }
-    
-    // Decrement hint counter
-    setState(() {
-      _hintsRemaining--;
-    });
-    
-    // Generate hint steps for this element
-    final steps = _generateElementHintSteps(r, c, correctVal, elementType, elementName);
-    
-    // Activate hint with element-specific apply action
-    _activateElementHint(
-      'Hint: $elementName',
-      steps,
-      r, c,
-      correctVal,
-      elementType,
-    );
-  }
-
-  List<HintStep> _generateElementHintSteps(int r, int c, int val, ElementType type, String name) {
-    final rowIndices = _getRowIndices(r);
-    final colIndices = _getColIndices(c);
-    final boxIndices = _getBoxIndices(r, c);
-    final allRelated = Set<int>.from(rowIndices)..addAll(colIndices)..addAll(boxIndices);
-    
-    return [
-      HintStep(
-        description: "Observe this cell",
-        highlights: {},
-        showTargetCell: true,
-        showNumber: false,
-      ),
-      HintStep(
-        description: "Each $name can only appear once in each row, column, and box.",
-        highlights: allRelated,
-        showTargetCell: true,
-        showNumber: false,
-      ),
-      HintStep(
-        description: "This cell should have this $name:",
-        highlights: boxIndices,
-        showTargetCell: true,
-        showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
-        elementType: type,
-      ),
-    ];
-  }
-
-  void _showEasyCrazySudokuHint(int r, int c) {
-    // Easy Crazy Sudoku uses shapes/colors only
-    // Check if the cell has a combined puzzle
-    if (_combinedPuzzle != null) {
-      // Get all element types for Easy mode (shape + color)
-      List<Map<String, dynamic>> allElements = [
-        {'type': ElementType.shape, 'label': 'Shape', 'icon': Icons.category},
-        {'type': ElementType.color, 'label': 'Color', 'icon': Icons.palette},
-      ];
-      
-      // Filter to elements that haven't been user-filled yet
-      List<Map<String, dynamic>> availableHints = [];
-      for (final element in allElements) {
-        final type = element['type'] as ElementType;
-        if (!_hasUserFilledElement(r, c, type)) {
-          availableHints.add(element);
-        }
-      }
-      
-      if (availableHints.isEmpty) {
-        _stopwatch.start();
-        showCosmicSnackbar(context, "This cell is already complete.");
-        return;
-      }
-      
-      if (availableHints.length == 1) {
-        // Auto-select the only remaining element
-        _executeElementHint(r, c, availableHints.first['type'] as ElementType);
-      } else {
-        // Show selection dialog for multiple element types
-        _showHintElementDialogForEasy(r, c, availableHints);
-      }
-    } else {
-      // Fallback: use standard hint logic
-      _HintResult? result = _tryHintForCell(r, c);
-      
-      if (result != null) {
-        setState(() {
-          _hintsRemaining--;
-        });
-        _activateMultiStepHint(result.hintType, result.steps, result.targetRow, result.targetCol, result.correctVal);
-      } else {
-        _stopwatch.start();
-        showCosmicSnackbar(context, "No hint available for this cell.");
-      }
-    }
-  }
-
-  void _showHintElementDialogForEasy(int r, int c, List<Map<String, dynamic>> availableHints) {
-    // Show dialog using GlassModal for consistency
-    GlassModal.show(
-      context: context,
-      title: 'CHOOSE HINT TYPE',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'Hints remaining: $_hintsRemaining',
-            style: TextStyle(
-              fontFamily: 'Rajdhani',
-              fontSize: 16,
-              color: kCosmicText.withOpacity(0.7),
-            ),
-          ),
-          const SizedBox(height: 20),
-          ...availableHints.map((hint) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _buildHintTypeOption(
-              icon: hint['icon'] as IconData,
-              label: 'Hint for ${hint['label']}',
-              onTap: () {
-                Navigator.pop(context);
-                _executeElementHint(r, c, hint['type'] as ElementType);
-              },
-            ),
-          )),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _stopwatch.start();
-            },
-            child: Text(
-              'Cancel',
-              style: TextStyle(
-                fontFamily: 'Rajdhani',
-                fontSize: 16,
-                color: kCosmicText.withOpacity(0.7),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHintTypeOption({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: () {
-        SoundManager().playClick();
-        onTap();
-      },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              kCosmicPrimary.withOpacity(0.15),
-              kCosmicSecondary.withOpacity(0.05),
-            ],
-          ),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: kCosmicPrimary.withOpacity(0.4), width: 1.5),
-        ),
-        child: Row(
+      // Show Ad Dialog
+      final bool? watchAd = await GlassModal.show<bool>(
+        context: context,
+        title: "NEED A HINT?",
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: kCosmicPrimary, size: 24),
-            const SizedBox(width: 16),
-            Text(
-              label,
-              style: const TextStyle(
-                fontFamily: 'Rajdhani',
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: kCosmicText,
-              ),
+            const Text(
+              "You're out of hints!",
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 20),
+            CosmicButton(
+              text: "WATCH AD (+1 HINT)",
+              icon: Icons.play_arrow,
+              onPressed: () => Navigator.pop(context, true),
+            ),
+            const SizedBox(height: 10),
+            CosmicButton(
+              text: "GET UNLIMITED HINTS",
+              icon: Icons.star, 
+              type: CosmicButtonType.secondary,
+              onPressed: () {
+                 Navigator.pop(context, false);
+                 Navigator.push(context, MaterialPageRoute(builder: (_) => PremiumScreen()));
+              },
+            ),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("CANCEL", style: TextStyle(color: Colors.white54)),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showStandardHint(int r, int c) {
-    _HintResult? result = _tryHintForCell(r, c);
-    
-    if (result != null) {
-      setState(() {
-        _hintsRemaining--;
-      });
-      _activateMultiStepHint(result.hintType, result.steps, result.targetRow, result.targetCol, result.correctVal);
-    } else {
-      // Try other cells in block (existing logic)
-      final bRow = (r ~/ _blockRows) * _blockRows;
-      final bCol = (c ~/ _blockCols) * _blockCols;
-      
-      for(int i=0; i<_blockRows; i++) {
-        for(int j=0; j<_blockCols; j++) {
-          int nr = bRow + i;
-          int nc = bCol + j;
-          if (nr == r && nc == c) continue;
-          if (_board[nr][nc] != 0) continue;
-          
-          result = _tryHintForCell(nr, nc);
-          if (result != null) {
-            setState(() {
-              _hintsRemaining--;
-            });
-            _activateMultiStepHint(result.hintType, result.steps, result.targetRow, result.targetCol, result.correctVal);
-            return;
-          }
-        }
-      }
-      
-      _stopwatch.start();
-      showCosmicSnackbar(context, "No hint available. Try a different cell.");
-    }
-  }
-
-  void _activateElementHint(String title, List<HintStep> steps, int r, int c, int val, ElementType elementType) {
-    setState(() {
-      _selectCell(r, c);
-      _activeHintElementType = elementType;
-      _activeHint = HintInfo(
-        title: title,
-        steps: steps,
-        currentStepIndex: 0,
-        targetRow: r,
-        targetCol: c,
-        value: val,
-        gameMode: widget.mode,
-        shapeMap: _shapeMap,
-        elementType: elementType,
       );
-    });
-  }
 
-  void _applyElementHint(int r, int c, int val, ElementType elementType) {
-    // Ensure the hint cell is selected
-    if (_selectedRow != r || _selectedCol != c) {
-      _selectCell(r, c);
-    }
-    
-    // Use the exact same input flow as clicking from the toolbar
-    // This ensures draft system is used, toolbar reflects selection, 
-    // and moving to another cell clears the draft (normal behavior)
-    _handleInput(val, type: elementType);
-  }
-
-  void _applyEasyCrazySudokuHint(int r, int c, int val) {
-    // For Easy Crazy Sudoku, the hint value corresponds to the shape/color combo
-    // Apply the correct solution directly
-    if (_combinedPuzzle != null) {
-      final sol = _combinedPuzzle!.solution[r][c];
-      setState(() {
-        _combinedPuzzle!.initialBoard[r][c] = sol;
-        _board[r][c] = 1;
-        _checkGroupCompletion(r, c);
-        if (_isBoardSolved()) {
-          _onLevelComplete();
-        }
-      });
-    } else if (_sudokuPuzzle != null) {
-      // Fallback for non-combined puzzles
-      _handleInput(val);
-    }
-    
-    if (SettingsController().hapticsEnabled) HapticFeedback.lightImpact();
-    SoundManager().playSuccessSound();
-  }
-
-  // Helper methods for mode-appropriate terminology
-  String _getElementNameSingular() {
-    switch (widget.mode) {
-      case GameMode.planets:
-        return 'planet';
-      case GameMode.shapes:
-        return 'shape';
-      case GameMode.colors:
-        return 'color';
-      case GameMode.cosmic:
-        return 'element';
-      default:
-        return 'number';
+      if (watchAd == true) {
+        AdManager.instance.showRewardedAd(() {
+          setState(() {
+            _hintsRemaining++;
+          });
+          if (mounted) {
+             _stopwatch.stop();
+             _showStandardHint(r, _selectedCol!);
+          }
+        });
+      }
     }
   }
 
-  String _getElementNamePlural() {
-    switch (widget.mode) {
-      case GameMode.planets:
-        return 'planets';
-      case GameMode.shapes:
-        return 'shapes';
-      case GameMode.colors:
-        return 'colors';
-      case GameMode.cosmic:
-        return 'elements';
-      default:
-        return 'numbers';
-    }
-  }
-
-  String _getHintTypeName() {
-    switch (widget.mode) {
-      case GameMode.planets:
-        return 'Last Planet';
-      case GameMode.shapes:
-        return 'Last Shape';
-      case GameMode.colors:
-        return 'Last Color';
-      case GameMode.cosmic:
-        return 'Last Element';
-      default:
-        return 'Last Digit';
-    }
-  }
+  // Simplified terminology helpers
+  String _getElementNameSingular() => 'number';
+  String _getElementNamePlural() => 'numbers';
+  
+  String _getHintTypeName() => 'Last Digit';
 
   String _getRuleDescription() {
     final elementName = _getElementNamePlural();
-    return 'Each $elementName can only appear once in the same row, column, or box. As shown, the $elementName that appear in the highlighted area cannot appear in this cell.';
+    return 'Each $elementName can only appear once in each row, column, or box. As shown, the $elementName that appear in the highlighted area cannot appear in this cell.';
   }
 
   Set<int> _getRowIndices(int r) {
@@ -3898,8 +2686,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         highlights: boxIndices,
         showTargetCell: true,
         showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
     ];
   }
@@ -3933,8 +2719,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         highlights: rowIndices,
         showTargetCell: true,
         showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
     ];
   }
@@ -3968,8 +2752,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         highlights: colIndices,
         showTargetCell: true,
         showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
     ];
   }
@@ -4003,8 +2785,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         highlights: allRelated,
         showTargetCell: true,
         showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
     ];
   }
@@ -4072,8 +2852,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         numberInstances: numberInstances,
         showTargetCell: false,
         showNumber: false,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
       // Step 2: Combined - show cross-hatching with eliminated cells
       HintStep(
@@ -4091,8 +2869,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         eliminatedCells: eliminatedCells,
         showTargetCell: true,
         showNumber: true,
-        elementValue: val,
-        gameMode: widget.mode,
       ),
     ];
   }
@@ -4100,7 +2876,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   void _activateHint(String title, String desc, int r, int c, int val, Set<int> highlights) {
     setState(() {
       _selectCell(r, c);
-      _activeHint = HintInfo.legacy(title, desc, r, c, val, highlights);
+      _activeHint = HintInfo(
+        title: title,
+        steps: [HintStep(description: desc, highlights: highlights)],
+        targetRow: r,
+        targetCol: c,
+        value: val,
+      );
     });
   }
   
@@ -4114,8 +2896,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
         targetRow: r,
         targetCol: c,
         value: val,
-        gameMode: widget.mode,
-        shapeMap: _shapeMap,
       );
     });
   }
@@ -4259,6 +3039,76 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       });
     }
   }
+
+  /// Mock: Fill a row INCORRECTLY (one wrong number) to test animation suppression
+  void _mockFillRowIncorrect() async {
+    // Find first incomplete row
+    for (int r = 0; r < _gridSize; r++) {
+      bool hasEmpty = false;
+      for (int c = 0; c < _gridSize; c++) {
+        if (_board[r][c] == 0) {
+          hasEmpty = true;
+          break;
+        }
+      }
+      if (hasEmpty) {
+        List<int> emptyCols = [];
+        for (int c = 0; c < _gridSize; c++) {
+          if (_board[r][c] == 0) emptyCols.add(c);
+        }
+        
+        for (int i = 0; i < emptyCols.length; i++) {
+          await Future.delayed(const Duration(milliseconds: 50));
+          if (!mounted) return;
+          
+          int col = emptyCols[i];
+          // Intentionally put WRONG value for the last empty cell
+          int value = (i == emptyCols.length - 1) 
+              ? (_getCorrectValue(r, col) % 9) + 1 // Guarantee wrong value (1-9)
+              : _getCorrectValue(r, col);
+          
+          setState(() {
+             _selectedRow = r;
+             _selectedCol = col;
+             _board[r][col] = value;
+             _checkGroupCompletion(r, col); // Should NOT trigger animation
+          });
+        }
+        return;
+      }
+    }
+  }
+
+  /// Mock: Simulate Wrong Input in Easy Mode
+  void _mockEasyInputWrong() {
+    if (widget.difficulty != Difficulty.easy) {
+       showCosmicSnackbar(context, "Switch to Easy mode to test this!");
+       return;
+    }
+    // Find an empty cell
+    for (int r=0; r<_gridSize; r++) {
+      for (int c=0; c<_gridSize; c++) {
+        if (_board[r][c] == 0) {
+           setState(() {
+             _selectedRow = r;
+             _selectedCol = c;
+           });
+           
+           // Try to input a WRONG value
+           int correct = _getCorrectValue(r, c);
+           // Fix: Use _gridSize instead of 9 to support 6x6 grids
+           int wrong = (correct % _gridSize) + 1;
+           
+           // Call handle input directly
+           _handleInput(wrong);
+           
+           // Verify result (visual check only for mock)
+           showCosmicSnackbar(context, "Tried inputting $wrong (Correct: $correct). Board value: ${_board[r][c]}");
+           return;
+        }
+      }
+    }
+  }
   
   /// Helper: Fill column with animation
   void _fillColumnWithAnimation(int col) async {
@@ -4323,54 +3173,60 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
   }
   
   // ========== END DEBUG/MOCK FUNCTIONS ==========
+
+  Future<void> _showPauseMenu() {
+    _stopwatch.stop();
+    return GlassModal.show(
+      context: context,
+      title: 'PAUSE',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 16),
+          CosmicButton(
+            text: 'RESUME',
+            icon: Icons.play_arrow,
+            onPressed: () => Navigator.pop(context),
+          ),
+          const SizedBox(height: 16),
+          CosmicButton(
+            text: 'RESTART',
+            icon: Icons.refresh,
+            type: CosmicButtonType.secondary,
+            onPressed: () {
+               Navigator.pop(context);
+               CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
+               final int safeLevel = widget.levelNumber.clamp(1, 50);
+               Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
+                 levelNumber: safeLevel, mode: widget.mode, difficulty: widget.difficulty,
+               )));
+            },
+          ),
+          const SizedBox(height: 16),
+          CosmicButton(
+            text: 'EXIT GAME',
+            icon: Icons.exit_to_app,
+            type: CosmicButtonType.destructive,
+            onPressed: () {
+               Navigator.pop(context); // Close dialog
+               Navigator.pop(context); // Close screen
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ).then((_) {
+       if (mounted) _stopwatch.start();
+    });
+  }
+
   
 
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
       onWillPop: () async {
-        _stopwatch.stop();
-        GlassModal.show(
-          context: context,
-          title: 'PAUSE',
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 16),
-              CosmicButton(
-                text: 'RESUME',
-                icon: Icons.play_arrow,
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(height: 16),
-              CosmicButton(
-                text: 'RESTART',
-                icon: Icons.refresh,
-                type: CosmicButtonType.secondary,
-                onPressed: () {
-                   Navigator.pop(context);
-                   CurrentGameRepository.clearGame(widget.mode, widget.difficulty);
-                   final int safeLevel = widget.levelNumber.clamp(1, 50);
-                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => GameScreen(
-                     levelNumber: safeLevel, mode: widget.mode, difficulty: widget.difficulty, sudokuSize: widget.sudokuSize,
-                   )));
-                },
-              ),
-              const SizedBox(height: 16),
-              CosmicButton(
-                text: 'EXIT GAME',
-                icon: Icons.exit_to_app,
-                type: CosmicButtonType.destructive,
-                onPressed: () {
-                   Navigator.pop(context);
-                   Navigator.pop(context);
-                   SoundManager().ensureAmbientMusicPlaying();
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ).then((_) => _stopwatch.start());
+        await _showPauseMenu();
         return false;
       },
       child: Scaffold(
@@ -4385,6 +3241,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
               icon: Icon(_showTimer ? Icons.visibility : Icons.visibility_off),
               onPressed: () => setState(() => _showTimer = !_showTimer),
             ),
+            IconButton(
+              icon: const Icon(Icons.pause),
+              onPressed: _showPauseMenu,
+            ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Column(
@@ -4398,18 +3258,37 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
           ],
         ),
         body: Stack(
-          children: [
-            // Accelerated starry background during win animation
-            AnimatedBuilder(
-              animation: _winAnimationController,
-              builder: (context, child) {
-                return StarryBackground(
-                  speedMultiplier: _winAnimationController.value > 0 ? 4.0 : 1.0,
-                );
-              },
+        children: [
+          // Loading indicator
+          if (_isLoading)
+            Container(
+              color: kCosmicBackground,
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: kCosmicPrimary),
+                    SizedBox(height: 16),
+                    Text(
+                      "Generating Reality...",
+                      style: TextStyle(fontFamily: 'Orbitron', color: kCosmicPrimary),
+                    )
+                  ],
+                ),
+              ),
             ),
-            SafeArea(
-              child: Column(
+          
+          // Accelerated starry background during win animation
+          if (!_isLoading) AnimatedBuilder(
+            animation: _winAnimationController,
+            builder: (context, child) {
+              return StarryBackground(
+                speedMultiplier: _winAnimationController.value > 0 ? 4.0 : 1.0,
+              );
+            },
+          ),
+          if (!_isLoading) SafeArea(
+            child: Column(
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(8.0),
@@ -4428,23 +3307,13 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                     ),
                   ),
                   _buildTools(context),
-                  if (_showDebugToolbar) _buildDebugToolbar(context), // DEBUG: Remove before production
+ 
                   if (_activeHint == null) _buildInputBar(context),
                   if (_activeHint != null) Container(height: 120),
                 ],
               ),
             ),
-            // Debug floating button
-            if (!_showDebugToolbar)
-              Positioned(
-                right: 16,
-                bottom: 100,
-                child: FloatingActionButton.small(
-                  backgroundColor: Colors.red.withOpacity(0.8),
-                  onPressed: () => setState(() => _showDebugToolbar = true),
-                  child: const Icon(Icons.bug_report, color: Colors.white, size: 20),
-                ),
-              ),
+
             IgnorePointer(
               child: AnimatedBuilder(
                 animation: _completionController,
@@ -4478,22 +3347,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                   info: _activeHint!,
                   onApply: () {
                     _stopwatch.start();
-                    
-                    if (_activeHintElementType != null && _combinedPuzzle != null) {
-                      // Element-specific hint for Crazy Sudoku
-                      _applyElementHint(_activeHint!.targetRow, _activeHint!.targetCol, 
-                                        _activeHint!.value, _activeHintElementType!);
-                    } else if (_isEasyCrazySudoku()) {
-                      // Easy Crazy Sudoku: fill with shape/color
-                      _applyEasyCrazySudokuHint(_activeHint!.targetRow, _activeHint!.targetCol, _activeHint!.value);
-                    } else {
-                      // Standard: fill with number
-                      _handleInput(_activeHint!.value);
-                    }
+                    _handleInput(_activeHint!.value);
                     
                     setState(() {
                       _activeHint = null;
-                      _activeHintElementType = null;
+                      // _activeHintElementType = null; // FIELD REMOVED
                     });
                   },
                   onClose: () {
@@ -4544,69 +3402,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
     );
   }
 
-  // DEBUG: Remove before production
-  Widget _buildDebugToolbar(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.1),
-        border: Border.all(color: Colors.red.withOpacity(0.3), width: 1),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('DEBUG TOOLS', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.bold)),
-              IconButton(
-                icon: const Icon(Icons.close, size: 16, color: Colors.red),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                onPressed: () => setState(() => _showDebugToolbar = false),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Expanded(
-                child: _DebugButton(
-                  label: 'Win',
-                  icon: Icons.emoji_events,
-                  onTap: _mockWinLevel,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: _DebugButton(
-                  label: 'Row',
-                  icon: Icons.horizontal_rule,
-                  onTap: _mockFillRow,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: _DebugButton(
-                  label: 'Col',
-                  icon: Icons.more_vert,
-                  onTap: _mockFillColumn,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: _DebugButton(
-                  label: 'Block',
-                  icon: Icons.grid_3x3,
-                  onTap: _mockFillBlock,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+
 
   Widget _buildBoard(BuildContext context) {
     return LayoutBuilder(
@@ -4649,16 +3445,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
             child: Stack(
               children: [
                 // Board content with fade-in for numbers (cells go first so grid lines render on top)
-                AnimatedBuilder(
-                  animation: Listenable.merge([
-                    _rotationController,
-                    _groupCompletionController,
-                    _numbersFadeController,
-                  ]),
+                  AnimatedBuilder(
+                    animation: Listenable.merge([
+                      _rotationController,
+                      _groupCompletionController,
+                      _numbersFadeController,
+                      _startupController, // Added startup controller
+                    ]),
                   builder: (context, child) {
-                    return Opacity(
-                      opacity: _numbersFadeController.value,
-                      child: Column(
+
+                    return Column(
                   children: List<Widget>.generate(_gridSize, (int row) {
                     return Expanded(
                       child: Row(
@@ -4696,44 +3492,17 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                           final bool isAnimated = _animatedCells.contains(cellIndex);
                           // final bool isGlittering = _glitterCells.contains(cellIndex); // Removed
                           
-                          CombinedCell? combinedCell;
-                          if (_combinedPuzzle != null) {
-                            // Only show initialBoard content if:
-                            // 1. Cell is fixed (pre-filled clue), OR
-                            // 2. Cell has been filled by user (_board > 0), OR
-                            // 3. Cell has user-filled elements (from hints)
-                            final bool isFixed = !_isEditable[row][col];
-                            final bool isUserFilled = _board[row][col] > 0;
-                            final String cellKey = '${row}_$col';
-                            final bool hasUserFilledElements = _userFilledElements.containsKey(cellKey) && 
-                                                             _userFilledElements[cellKey]!.isNotEmpty;
-                            
-                            if (isFixed || isUserFilled || hasUserFilledElements) {
-                              combinedCell = _combinedPuzzle!.initialBoard[row][col];
-                            } else {
-                              // Empty editable cell - don't show anything from initialBoard
-                              combinedCell = null;
-                            }
-                          }
-                          
-                          final bool rightBorder = (col + 1) % _blockCols == 0 && col != _gridSize - 1;
-                          final bool bottomBorder = (row + 1) % _blockRows == 0 && row != _gridSize - 1;
-                          final bool isCombinedMode = (widget.difficulty == Difficulty.medium || 
-                                                       widget.difficulty == Difficulty.hard ||
-                                                       widget.difficulty == Difficulty.expert ||
-                                                       widget.difficulty == Difficulty.master) && widget.mode != GameMode.numbers;
                           
                           // Check if we should show hint number for this cell
                           bool hintShowNumber = false;
                           int? hintValue;
-                          ElementType? hintElementType;
                           if (_activeHint != null && 
                               row == _activeHint!.targetRow && 
                               col == _activeHint!.targetCol &&
                               _activeHint!.currentStep.showNumber) {
                             hintShowNumber = true;
-                            hintValue = _activeHint!.currentStep.elementValue ?? _activeHint!.value;
-                            hintElementType = _activeHint!.currentStep.elementType ?? _activeHintElementType;
+                            // _activeHint!.currentStep.elementValue is removed, use value
+                            hintValue = _activeHint!.value;
                           }
                           
                           // Calculate flip delay based on distance from center
@@ -4741,12 +3510,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                           double normalizedDist = dist / maxDist; // 0.0 to 1.0
                           
                           // Animation logic:
-                          // We want the ripple to start at 0 and end at 1.0
-                          // The whole animation is controlled by _winAnimationController (0 to 1)
-                          // We can say the ripple takes 60% of the time, and individual flips take 40%
-                          // Start time for this cell: normalizedDist * 0.6
-                          // End time for this cell: Start time + 0.4
-                          
                           double start = normalizedDist * 0.5;
                           double end = start + 0.5;
                           double flipValue = 0.0;
@@ -4763,19 +3526,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                             flipValue = Curves.easeInOutBack.transform(flipValue);
                           }
                           
-                          // Check if this cell has user-filled elements (from hints)
-                          final String cellKey = '${row}_$col';
-                          final bool hasUserFilledElements = _userFilledElements.containsKey(cellKey) && 
-                                                           _userFilledElements[cellKey]!.isNotEmpty;
-                          
                           Widget cellWidget = _SudokuCell(
                                 key: ValueKey('cell_${row}_${col}_${value}_${isSelected}'), // Force rebuild on selection change
                                 value: value,
                                 notes: _notes[row][col],
-                                shapeNotes: isCombinedMode ? _shapeNotes[row][col] : const {},
-                                colorNotes: isCombinedMode ? _colorNotes[row][col] : const {},
-                                numberNotes: isCombinedMode ? _numberNotes[row][col] : const {},
-                                draftCell: isCombinedMode && isSelected ? _draftCell : null,
                                 row: row,
                                 col: col,
                                 gridSize: _gridSize,
@@ -4784,19 +3538,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                                 isInvalid: isInvalid,
                                 highlight: highlight,
                                 isAnimated: isAnimated,
-                                glitterValue: _glitterController.value, // Pass animation value
-                                gameMode: widget.mode,
                                 difficulty: widget.difficulty,
-                                combinedCell: combinedCell,
-                                selectedElement: null, 
-                                shapeId: _shapeMap[value > 0 ? value - 1 : 0],
-                                shapeMap: _shapeMap, 
                                 onTap: () => _selectCell(row, col),
                                 hintShowNumber: hintShowNumber,
                                 hintValue: hintValue,
-                                hintElementType: hintElementType,
                                 flipValue: flipValue,
-                                hasUserFilledElements: hasUserFilledElements,
                           );
 
                           // Grid lines are now drawn ONLY by _GridDrawingPainter to avoid double lines
@@ -4804,24 +3550,24 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
                         }),
                       ),
                     );
+
                   }),
-                      ),
                 );
               },
             ),
-          // Grid lines - drawn ON TOP of cells so they're always visible
-          IgnorePointer(
+            // Grid lines - drawn ON TOP of cells so they're always visible
+            IgnorePointer(
             child: AnimatedBuilder(
-              animation: _gridAnimationController,
-              builder: (context, child) {
+                animation: _startupController,
+                builder: (context, child) {
                 return CustomPaint(
-                  size: Size(boardLength - 4, boardLength - 4),
-                  painter: _GridDrawingPainter(
+                    size: Size(boardLength - 4, boardLength - 4),
+                    painter: _CosmicGridPainter(
                     gridSize: _gridSize,
                     blockRows: _blockRows,
                     blockCols: _blockCols,
-                    progress: _gridAnimationController.value,
-                  ),
+                    progress: _startupController.value,
+                    ),
                 );
               },
             ),
@@ -4896,14 +3642,51 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin, 
       gameMode: widget.mode,
       difficulty: widget.difficulty,
       gridSize: _gridSize,
-      onInput: (int value, ElementType? type) {
-        _handleInput(value, type: type);
+      onInput: (int value) {
+        _handleInput(value);
       },
-      draftCell: _draftCell,
-      shapeMap: _shapeMap,
       isValueCompleted: _isValueCompleted,
-      selectedElement: _combinedPuzzle?.selectedElement,
     );
+  }
+
+  void _showStandardHint(int r, int c) {
+    if (_activeHint != null) return; // Already showing hint
+    
+    // Decrease hints remaining
+    setState(() {
+      _hintsRemaining--;
+    });
+    
+    // Try to find a smart hint
+    final smartHint = _tryHintForCell(r, c);
+    
+    setState(() {
+      if (smartHint != null) {
+          _activeHint = HintInfo(
+            title: smartHint.hintType,
+            steps: smartHint.steps,
+            targetRow: smartHint.targetRow,
+            targetCol: smartHint.targetCol,
+            value: smartHint.correctVal,
+          );
+      } else {
+          // Fallback to simple number show if no smart hint found
+          final correctVal = _getCorrectValue(r, c);
+          final step = HintStep(
+            description: "The value here is $correctVal",
+            showNumber: true,
+            highlights: {r * _gridSize + c},
+          );
+           
+          _activeHint = HintInfo(
+            title: "Hint",
+            steps: [step],
+            targetRow: r,
+            targetCol: c,
+            value: correctVal,
+          );
+      }
+    });
   }
   
   bool _isValueCompleted(int value) {
@@ -4931,41 +3714,15 @@ class _HintOverlay extends StatelessWidget {
   final VoidCallback onNext;
   final VoidCallback onPrevious;
 
-  // Build visual element widget based on game mode and element type
-  Widget? _buildElementWidget(HintStep step, HintInfo info) {
-    final value = step.elementValue ?? info.value;
-    final gameMode = step.gameMode ?? info.gameMode;
-    final elementType = step.elementType ?? info.elementType;
-    final shapeMap = info.shapeMap;
+  @override
+  Widget build(BuildContext context) {
+    final currentStep = info.currentStep;
+    final isLastStep = info.isLastStep;
+    final isFirstStep = info.isFirstStep;
     
-    if (gameMode == null) return null;
-    
-    // For combined modes with element type specified
-    if (elementType != null) {
-      switch (elementType) {
-        case ElementType.shape:
-          return Container(
-            width: 36,
-            height: 36,
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: kRetroSurface,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: SudokuShape(id: value, color: kCosmicPrimary),
-          );
-        case ElementType.color:
-          return Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: _getColorForValue(value),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-          );
-        case ElementType.number:
-          return Container(
+    // Build visual element if this step should show it (just the number for Mini Sudoku)
+    final Widget? elementWidget = currentStep.showNumber 
+        ? Container(
             width: 36,
             height: 36,
             decoration: BoxDecoration(
@@ -4974,7 +3731,7 @@ class _HintOverlay extends StatelessWidget {
             ),
             child: Center(
               child: Text(
-                '$value',
+                '${info.value}',
                 style: const TextStyle(
                   color: kCosmicPrimary,
                   fontSize: 20,
@@ -4982,106 +3739,7 @@ class _HintOverlay extends StatelessWidget {
                 ),
               ),
             ),
-          );
-      }
-    }
-    
-    // For single-element modes
-    switch (gameMode) {
-      case GameMode.planets:
-        return Container(
-          width: 36,
-          height: 36,
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            color: kRetroSurface,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: CustomPaint(painter: PlanetPainter(value), size: const Size(32, 32)),
-        );
-      case GameMode.shapes:
-        final shapeId = shapeMap != null && value > 0 && value <= shapeMap.length 
-            ? shapeMap[value - 1] 
-            : value;
-        return Container(
-          width: 36,
-          height: 36,
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: kRetroSurface,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: SudokuShape(id: shapeId, color: kCosmicPrimary),
-        );
-      case GameMode.colors:
-        return Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: _getColorForValue(value),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-        );
-      case GameMode.cosmic:
-        return Container(
-          width: 36,
-          height: 36,
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            color: kRetroSurface,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: CustomPaint(painter: CosmicPainter(value), size: const Size(32, 32)),
-        );
-      case GameMode.numbers:
-        return Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: kRetroSurface,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Center(
-            child: Text(
-              '$value',
-              style: const TextStyle(
-                color: kCosmicPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        );
-      default:
-        return null;
-    }
-  }
-
-  Color _getColorForValue(int value) {
-    const colors = [
-      Color(0xFFFF4757), // Bright Watermelon
-      Color(0xFF2ED573), // Neon Green
-      Color(0xFF1E90FF), // Dodger Blue
-      Color(0xFFFFD32A), // Vibrant Yellow
-      Color(0xFFA29BFE), // Periwinkle Purple (Bright)
-      Color(0xFFFF7F50), // Coral
-      Color(0xFF00D2D3), // Bright Cyan
-      Color(0xFFFF6B81), // Pastel Red/Pink
-      Color(0xFF747D8C), // Cool Grey
-    ];
-    return colors[(value - 1) % colors.length];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final currentStep = info.currentStep;
-    final isLastStep = info.isLastStep;
-    final isFirstStep = info.isFirstStep;
-    
-    // Build element widget if this step should show one
-    final Widget? elementWidget = currentStep.showNumber 
-        ? _buildElementWidget(currentStep, info) 
+          )
         : null;
     
     return Container(
@@ -5316,10 +3974,6 @@ class _SudokuCell extends StatefulWidget {
     super.key,
     required this.value,
     required this.notes,
-    this.shapeNotes,
-    this.colorNotes,
-    this.numberNotes,
-    this.draftCell,
     required this.row,
     required this.col,
     required this.gridSize,
@@ -5328,27 +3982,16 @@ class _SudokuCell extends StatefulWidget {
     required this.isInvalid,
     required this.highlight,
     required this.isAnimated,
-    required this.glitterValue,
-    required this.gameMode,
     required this.difficulty,
-    this.combinedCell,
-    this.selectedElement,
-    required this.shapeId,
-    required this.shapeMap,
     required this.onTap,
     this.hintShowNumber = false,
     this.hintValue,
-    this.hintElementType,
     this.flipValue = 0.0,
-    this.hasUserFilledElements = false,
+    this.startupProgress = 1.0,
   });
 
   final int value;
   final Set<int> notes;
-  final Set<int>? shapeNotes;
-  final Set<int>? colorNotes;
-  final Set<int>? numberNotes;
-  final CombinedCell? draftCell;
   final int row;
   final int col;
   final int gridSize;
@@ -5357,19 +4000,12 @@ class _SudokuCell extends StatefulWidget {
   final bool isInvalid;
   final CellHighlight highlight;
   final bool isAnimated;
-  final double glitterValue;
-  final GameMode gameMode;
   final Difficulty difficulty;
-  final CombinedCell? combinedCell;
-  final ElementType? selectedElement;
-  final int shapeId;
-  final List<int> shapeMap;
   final VoidCallback onTap;
   final bool hintShowNumber;
   final int? hintValue;
-  final ElementType? hintElementType;
   final double flipValue;
-  final bool hasUserFilledElements;
+  final double startupProgress;
 
   @override
   State<_SudokuCell> createState() => _SudokuCellState();
@@ -5531,6 +4167,25 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
 
   @override
   Widget build(BuildContext context) {
+    // --- Cosmic Materialization Logic ---
+    double opacity = 1.0;
+    double scale = 1.0;
+
+    if (widget.startupProgress < 1.0) {
+      final double scanProgress = (widget.startupProgress * 1.25).clamp(0.0, 1.0);
+      final double cellRelY = widget.row / widget.gridSize; 
+      
+      if (scanProgress > cellRelY) {
+         double cellReveal = (scanProgress - cellRelY) * 5.0; 
+         cellReveal = cellReveal.clamp(0.0, 1.0);
+         opacity = cellReveal;
+         scale = 0.8 + (0.2 * cellReveal);
+      } else {
+         opacity = 0.0;
+         scale = 0.0;
+      }
+    }
+
     // ALL cells start with transparent background so grid lines show through
     Color baseColor = Colors.transparent;
     Color contentColor = kRetroText;
@@ -5540,7 +4195,8 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
       contentColor = kRetroError; // Red text/content for mistakes
     } else if (!widget.isEditable) {
        // Prefilled: brighter text, NO background so grid lines visible
-       contentColor = Colors.white.withOpacity(0.95); // Brighter for prefilled
+       // Prefilled: brighter text, NO background so grid lines visible
+       contentColor = Colors.white; // Brighter for prefilled
     } else if (widget.value > 0) {
        // User-filled: slightly dimmer text
        contentColor = kRetroText.withOpacity(0.85);
@@ -5659,7 +4315,7 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
       );
     } else {
       cellContent = GestureDetector(
-        onTap: widget.isEditable ? widget.onTap : null,
+        onTap: widget.onTap,
         child: _buildCellContainer(
           decoration,
           contentColor,
@@ -5676,6 +4332,17 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
       );
     }
     
+    // Apply Startup Animation
+    if (opacity < 1.0 || scale < 1.0) {
+       cellContent = Opacity(
+          opacity: opacity,
+          child: Transform.scale(
+             scale: scale,
+             child: cellContent,
+          ),
+       );
+    }
+
     // Apply 3D Flip Animation (unchanged)
     if (widget.flipValue > 0) {
       return Transform(
@@ -5691,128 +4358,41 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
   }
 
   Widget _buildCellContainer(BoxDecoration decoration, Color contentColor, bool showEliminatedMark, {Widget? edgeHighlight}) {
-    // Medium and Hard modes: Show draft cell if selected, or show separate notes
-    if ((widget.difficulty == Difficulty.medium || widget.difficulty == Difficulty.hard ||
-         widget.difficulty == Difficulty.expert || widget.difficulty == Difficulty.master) && 
-        widget.gameMode != GameMode.numbers) {
-      Widget content;
-      
-      // Check if cell is filled first (before showing draft)
-      // Medium: only needs shapeId and colorId (no numbers)
-      // Hard/Expert/Master: needs all three (shapeId, colorId, numberId)
-      final bool isMedium = widget.difficulty == Difficulty.medium;
-      final bool isFilled = widget.combinedCell != null && 
-          widget.combinedCell!.shapeId != null && 
-          widget.combinedCell!.colorId != null && 
-          (isMedium ? true : widget.combinedCell!.numberId != null) && // Medium doesn't need numberId
-          (widget.value > 0 || !widget.isEditable); // Filled if has value or is fixed
-      
-      // Check if cell has any partial fill (from hints)
-      // Only show partial fill if cell is editable and has user-filled elements
-      final bool hasPartialFill = widget.combinedCell != null && 
-          widget.isEditable && // Only editable cells can have partial fills from hints
-          widget.hasUserFilledElements && // Must have user-filled elements
-          (widget.combinedCell!.shapeId != null || 
-           widget.combinedCell!.colorId != null || 
-           widget.combinedCell!.numberId != null) &&
-          !isFilled;
-      
-      // Priority: Filled cell > Partial fill > Draft cell (if selected) > Notes > Empty
-      if (isFilled) {
-        // Cell is filled - show the filled cell (even if selected)
-        content = _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor);
-      } else if (hasPartialFill) {
-        // Cell has partial fill (from hint) - show it
-        // Build content stack for partial fill + draft on top
-        List<Widget> contentStack = [];
-        
-        // Show partial fill as base
-        contentStack.add(_buildPartialFillElement(widget.combinedCell!, contentColor));
-        
-        // Show draft on top if selected and has additional selections
-        if (widget.draftCell != null && widget.isSelected && widget.isEditable &&
-            (widget.draftCell!.shapeId != null || widget.draftCell!.colorId != null || widget.draftCell!.numberId != null)) {
-          final Color draftShapeColor = widget.draftCell!.colorId != null 
-              ? _getColorForValue(widget.draftCell!.colorId!)
-              : Colors.white.withOpacity(0.9);
-          contentStack.add(_buildDraftCell(widget.draftCell!, draftShapeColor, contentColor));
-        }
-        
-        if (contentStack.length == 1) {
-          content = contentStack.first;
-        } else {
-          content = Stack(children: contentStack);
-        }
+    final double cellHeight = MediaQuery.of(context).size.width / widget.gridSize;
+
+    // Simplified content builder
+    Widget content;
+    
+    // Hint overrides everything if valid
+    if (widget.hintShowNumber && widget.hintValue != null) {
+      if (widget.hintValue != null) {
+        content = _buildHintElement();
       } else {
-        // Build content stack
-        List<Widget> contentStack = [];
-        
-        // Always show notes if present (behind draft)
-        if (widget.shapeNotes != null && 
-            (widget.shapeNotes!.isNotEmpty || widget.colorNotes!.isNotEmpty || widget.numberNotes!.isNotEmpty)) {
-          contentStack.add(_buildMediumNotes());
-        }
-        
-        // Show draft on top if selected
-        if (widget.draftCell != null && widget.isSelected && widget.isEditable &&
-            (widget.draftCell!.shapeId != null || widget.draftCell!.colorId != null || widget.draftCell!.numberId != null)) {
-          // Use white as default if only shape is selected (no color)
-          final Color draftShapeColor = widget.draftCell!.colorId != null 
-              ? _getColorForValue(widget.draftCell!.colorId!)
-              : Colors.white.withOpacity(0.9);
-          contentStack.add(_buildDraftCell(widget.draftCell!, draftShapeColor, contentColor));
-        }
-        
-        if (contentStack.isEmpty) {
-          content = const SizedBox.expand();
-        } else if (contentStack.length == 1) {
-          content = contentStack.first;
-        } else {
-          content = Stack(children: contentStack);
-        }
+        content = const SizedBox.shrink();
       }
-      
-      return Container(
-        decoration: decoration,
-        child: Stack(
-          children: [
-            Center(child: content),
-            if (edgeHighlight != null)
-              Positioned.fill(child: edgeHighlight),
-            if (showEliminatedMark)
-              Center(
-                child: Text(
-                  '✕',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            // Show hint element for combined modes
-            if (widget.hintShowNumber && widget.hintValue != null && !isFilled &&
-                widget.difficulty != Difficulty.medium)
-              Center(
-                child: _buildHintElement(),
-              ),
-          ],
+    }
+    // Value display
+    else if (widget.value > 0) {
+      // Standard Number
+      content = Text(
+        '${widget.value}',
+        style: TextStyle(
+          fontSize: widget.gridSize == 6 ? 28 : (cellHeight * 0.55),
+          fontWeight: widget.isEditable ? FontWeight.w500 : FontWeight.bold,
+          color: contentColor,
+          fontFamily: 'Rajdhani',
         ),
       );
     }
-    
-    // Standard mode
-    Widget content;
-    if (widget.value > 0 || (widget.combinedCell != null && (widget.combinedCell!.shapeId != null || widget.combinedCell!.colorId != null || widget.combinedCell!.numberId != null))) {
-          content = (widget.combinedCell != null)
-                ? _buildCombinedElement(widget.combinedCell!, widget.selectedElement, contentColor)
-                : _buildSingleElement(context, contentColor);
-    } else if (widget.notes.isNotEmpty) {
-       content = _buildNotes();
-    } else {
-       content = const SizedBox.expand();
+    // Notes display
+    else if (widget.notes.isNotEmpty) {
+      content = _buildNotes();
     }
-
+    // Empty
+    else {
+      content = const SizedBox.shrink();
+    }
+    
     return Container(
       decoration: decoration,
       child: Stack(
@@ -5831,671 +4411,79 @@ class _SudokuCellState extends State<_SudokuCell> with SingleTickerProviderState
                 ),
               ),
             ),
-          // Show hint element for standard mode (only show if cell is empty)
-          if (widget.hintShowNumber && widget.hintValue != null && widget.value == 0)
-            Center(
-              child: _buildHintElement(),
-            ),
         ],
       ),
     );
   }
   
-  Widget _buildDraftCell(CombinedCell draft, Color draftShapeColor, Color defaultColor) {
-    // Show ONLY what's selected in draft - nothing else
-    List<Widget> widgets = [];
-    
-    // Show shape only if shapeId is selected
-    if (draft.shapeId != null) {
-      widgets.add(
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: SudokuShape(id: draft.shapeId!, color: draftShapeColor),
-          ),
-        ),
-      );
-    }
-    
-    // Show color circle only if colorId is selected (and shapeId is NOT selected)
-    if (draft.colorId != null && draft.shapeId == null) {
-      widgets.add(
-        Center(
-          child: Container(
-            margin: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _getColorForValue(draft.colorId!),
-              shape: BoxShape.circle,
-              border: Border.all(color: kRetroHighlight, width: 2),
-            ),
-          ),
-        ),
-      );
-    }
-    
-    // Show number if numberId is selected
-    if (draft.numberId != null) {
-      // If shape is selected, overlay number on shape (like final filled cell)
-      if (draft.shapeId != null) {
-        widgets.add(
-          Center(
-            child: Text(
-              draft.numberId.toString(),
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
-                fontSize: 20,
-                fontFamily: 'Courier',
-                shadows: [
-                  Shadow(
-                    color: Colors.black.withOpacity(0.8),
-                    blurRadius: 2,
-                    offset: const Offset(1, 1),
-                  ),
-                  Shadow(
-                    color: Colors.black.withOpacity(0.5),
-                    blurRadius: 4,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      } else {
-        // If no shape, show number alone
-        widgets.add(
-          Center(
-            child: Text(
-              draft.numberId.toString(),
-              style: TextStyle(
-                color: kRetroText,
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-                fontFamily: 'Courier',
-              ),
-            ),
-          ),
-        );
-      }
-    }
-    
-    if (widgets.isEmpty) {
-      return const SizedBox.expand();
-    }
-    
-    return Stack(
-      fit: StackFit.expand,
-      children: widgets,
-    );
-  }
-  
-  // Build partial fill element - shows elements that have been filled via hints
-  Widget _buildPartialFillElement(CombinedCell cell, Color defaultColor) {
-    List<Widget> widgets = [];
-    
-    final int? shapeId = cell.shapeId;
-    final int? colorId = cell.colorId;
-    final int? numberId = cell.numberId;
-    
-    // Determine shape color - use color if available, else a subtle gray
-    final Color shapeColor = colorId != null 
-        ? _getColorForValue(colorId)
-        : Colors.white.withOpacity(0.7);
-    
-    // Show shape if present
-    if (shapeId != null) {
-      widgets.add(
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: SudokuShape(id: shapeId, color: shapeColor),
-          ),
-        ),
-      );
-    }
-    
-    // Show color circle if only color is present (no shape)
-    if (colorId != null && shapeId == null) {
-      widgets.add(
-        Center(
-          child: Container(
-            margin: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: shapeColor,
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: shapeColor.withOpacity(0.6), blurRadius: 10, spreadRadius: 1)],
-            ),
-          ),
-        ),
-      );
-    }
-    
-    // Show number if present
-    if (numberId != null) {
-      if (shapeId != null) {
-        // Number overlaid on shape
-        widgets.add(
-          Center(
-            child: Text(
-              numberId.toString(),
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
-                fontSize: 20,
-                fontFamily: 'Courier',
-                shadows: [
-                  Shadow(
-                    color: Colors.black.withOpacity(0.8),
-                    blurRadius: 2,
-                    offset: const Offset(1, 1),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      } else {
-        // Number alone
-        widgets.add(
-          Center(
-            child: Text(
-              numberId.toString(),
-              style: TextStyle(
-                color: kRetroText,
-                fontWeight: FontWeight.bold,
-                fontSize: 24,
-                fontFamily: 'Courier',
-              ),
-            ),
-          ),
-        );
-      }
-    }
-    
-    if (widgets.isEmpty) {
-      return const SizedBox.expand();
-    }
-    
-    return Stack(
-      fit: StackFit.expand,
-      children: widgets,
-    );
-  }
-  
-  Widget _buildMediumNotes() {
-    final bool isMedium = widget.difficulty == Difficulty.medium;
-    final bool isHard = widget.difficulty == Difficulty.hard;
-    final bool isCrazySudoku = widget.gameMode != GameMode.numbers && 
-                                widget.gameMode != GameMode.custom;
-    
-    // Determine grid size based on difficulty and mode
-    int effectiveGridSize;
-    if (isCrazySudoku && (isMedium || isHard)) {
-      effectiveGridSize = 6; // Crazy Sudoku Medium/Hard is 6x6
-    } else {
-      effectiveGridSize = widget.gridSize;
-    }
-    
-    // Item counts
-    final int numberCount = isMedium ? 0 : effectiveGridSize;
-    final int colorCount = effectiveGridSize;
-    final int shapeCount = effectiveGridSize;
-    final int totalItems = numberCount + colorCount + shapeCount;
-    
-    // Determine grid dimensions
-    int rows, cols;
-    double fontSize = 7;
-    double iconSize = 6;
-    double shapeSize = 8;
-    
-    if (isMedium) {
-      // Medium (6x6): 12 items (6 colors + 6 shapes) -> 4 rows x 3 cols
-      rows = 4;
-      cols = 3;
-    } else if (effectiveGridSize == 6) {
-      // Hard (6x6): 18 items (6+6+6) -> 4 rows x 5 cols (fits 20, uses 18)
-      rows = 4;
-      cols = 5;
-      fontSize = 6;
-      iconSize = 5;
-      shapeSize = 6;
-    } else {
-      // Expert/Master (9x9): 27 items (9+9+9) -> 6 rows x 5 cols (fits 30, uses 27)
-      rows = 6;
-      cols = 5;
-      fontSize = 5;
-      iconSize = 4;
-      shapeSize = 5;
-    }
-    
-    return Padding(
-      padding: const EdgeInsets.all(1),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: List.generate(rows, (rowIndex) {
-          return Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: List.generate(cols, (colIndex) {
-                final int index = rowIndex * cols + colIndex;
-                if (index >= totalItems) return const Expanded(child: SizedBox());
-                
-                // Determine element type and value
-                ElementType type;
-                int val;
-                
-                if (index < numberCount) {
-                  type = ElementType.number;
-                  val = index + 1;
-                } else if (index < numberCount + colorCount) {
-                  type = ElementType.color;
-                  val = index - numberCount + 1;
-                } else {
-                  type = ElementType.shape;
-                  val = index - numberCount - colorCount + 1;
-                }
-                
-                // Check if this note is present
-                bool isPresent = false;
-                if (type == ElementType.number) {
-                  isPresent = widget.numberNotes?.contains(val) ?? false;
-                } else if (type == ElementType.color) {
-                  isPresent = widget.colorNotes?.contains(val) ?? false;
-                } else {
-                  isPresent = widget.shapeNotes?.contains(val) ?? false;
-                }
-                
-                if (!isPresent) {
-                  return const Expanded(child: SizedBox());
-                }
-                
-                return Expanded(
-                  child: _buildDenseNoteWithSize(type, val, fontSize, iconSize, shapeSize),
-                );
-              }),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildDenseNoteWithSize(ElementType type, int val, double fontSize, double iconSize, double shapeSize) {
-    if (type == ElementType.number) {
-      return Center(
-        child: Text(
-          '$val',
-          style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: FontWeight.bold,
-            color: kRetroText.withOpacity(0.8),
-          ),
-        ),
-      );
-    } else if (type == ElementType.color) {
-      return Center(
-        child: Container(
-          width: iconSize,
-          height: iconSize,
-          decoration: BoxDecoration(
-            color: _getColorForValue(val),
-            shape: BoxShape.circle,
-          ),
-        ),
-      );
-    } else {
-      return Center(
-        child: SizedBox(
-          width: shapeSize,
-          height: shapeSize,
-          child: SudokuShape(
-            id: val,
-            color: kRetroText.withOpacity(0.7),
-          ),
-        ),
-      );
-    }
-  }
-
-  Widget _buildStackedNote(int val, bool hasShape, bool hasColor, bool hasNumber) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        // 1. Color Note (Planet/Nebula Background)
-        if (hasColor)
-          Container(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                colors: [
-                  _getColorForValue(val).withOpacity(0.8),
-                  _getColorForValue(val).withOpacity(0.3),
-                  Colors.transparent,
-                ],
-                stops: const [0.3, 0.7, 1.0],
-              ),
-              shape: BoxShape.circle,
-            ),
-          ),
-          
-        // 2. Shape Note (Glowing Icon)
-        if (hasShape)
-          Padding(
-            padding: const EdgeInsets.all(2),
-            child: SudokuShape(
-              id: val, 
-              color: hasColor ? Colors.white.withOpacity(0.9) : kRetroText.withOpacity(0.8),
-            ),
-          ),
-          
-        // 3. Number Note (Floating Overlay)
-        if (hasNumber)
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.7),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: kRetroText.withOpacity(0.3), width: 0.5),
-              ),
-              child: Text(
-                '$val',
-                style: TextStyle(
-                  fontSize: 8, 
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  shadows: [
-                    BoxShadow(color: kRetroHighlight, blurRadius: 2)
-                  ],
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
   Widget _buildNotes() {
-    return Padding(
-      padding: const EdgeInsets.all(2),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        runAlignment: WrapAlignment.center,
-        children: List.generate(widget.gridSize, (index) {
-          final val = index + 1;
-          if (!widget.notes.contains(val)) return SizedBox(width: widget.gridSize == 9 ? 8 : 12, height: widget.gridSize == 9 ? 8 : 12);
-          
-          // Render shape for notes if shapes mode
-          if (widget.gameMode == GameMode.shapes) {
-              final int mappedId = widget.shapeMap[index]; // Index 0 is value 1
-              return SizedBox(
-                width: widget.gridSize == 9 ? 8 : 12,
-                height: widget.gridSize == 9 ? 8 : 12,
-                child: SudokuShape(id: mappedId, color: kRetroText.withOpacity(0.7)),
-              );
-          }
-          // Render planet icon for notes if planets mode
-          if (widget.gameMode == GameMode.planets) {
-            return SizedBox(
-              width: widget.gridSize == 9 ? 8 : 12,
-              height: widget.gridSize == 9 ? 8 : 12,
-              child: CustomPaint(painter: PlanetPainter(val), size: const Size(8, 8)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double size = constraints.maxWidth;
+        // 2x3 grid for 6x6 notes
+        final int cols = 3;
+        final int rows = 2;
+        final double cellW = size / cols;
+        final double cellH = size / rows;
+        
+        return Stack(
+          children: widget.notes.map((n) {
+            // Map 1-6 to grid positions (0-5)
+            // 1 2 3
+            // 4 5 6
+            final int index = n - 1;
+            final int r = index ~/ cols;
+            final int c = index % cols;
+            
+            return Positioned(
+              left: c * cellW,
+              top: r * cellH,
+              width: cellW,
+              height: cellH,
+              child: Center(
+                child: Text(
+                  '$n',
+                  style: TextStyle(
+                    fontSize: size * 0.25,
+                    color: kRetroText.withOpacity(0.7),
+                    height: 1.0,
+                    fontFamily: 'Rajdhani',
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             );
-          }
-          // Render cosmic icon for notes if cosmic mode
-          if (widget.gameMode == GameMode.cosmic) {
-            return SizedBox(
-              width: widget.gridSize == 9 ? 8 : 12,
-              height: widget.gridSize == 9 ? 8 : 12,
-              child: CustomPaint(painter: CosmicPainter(val), size: const Size(8, 8)),
-            );
-          }
-          // Default Number Note
-          return SizedBox(
-            width: widget.gridSize == 9 ? 8 : 12,
-            height: widget.gridSize == 9 ? 8 : 12,
-            child: Center(child: Text('$val', style: TextStyle(fontSize: widget.gridSize == 9 ? 8 : 10, color: kRetroText))),
-          );
-        }),
-      ),
+          }).toList(),
+        );
+      },
     );
   }
 
-  /// Builds the visual element to display in a cell during hint
-  /// Shows shape, color, or number based on hintElementType
   Widget _buildHintElement() {
-    final value = widget.hintValue!;
-    final elementType = widget.hintElementType;
-    
-    // For element-specific hints (shape/color/number in combined modes)
-    if (elementType != null) {
-      switch (elementType) {
-        case ElementType.shape:
-          return SizedBox(
-            width: 32,
-            height: 32,
-            child: SudokuShape(id: value, color: kCosmicPrimary),
-          );
-        case ElementType.color:
-          return Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: _getColorForValue(value),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
-                BoxShadow(
-                  color: _getColorForValue(value).withOpacity(0.6),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ],
+    return Center(
+      child: Text(
+        (widget.hintValue ?? '').toString(),
+        style: TextStyle(
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
+          color: kRetroHint,
+          shadows: [
+            Shadow(
+              color: kCosmicPrimary.withOpacity(0.8),
+              blurRadius: 8,
             ),
-          );
-        case ElementType.number:
-          return Text(
-            value.toString(),
-            style: TextStyle(
-              color: kCosmicPrimary,
-              fontWeight: FontWeight.bold,
-              fontSize: 28,
-              fontFamily: 'Courier',
-              shadows: [
-                Shadow(
-                  color: kCosmicPrimary.withOpacity(0.8),
-                  blurRadius: 8,
-                ),
-              ],
-            ),
-          );
-      }
-    }
-    
-    // Default: show based on game mode for non-element-specific hints
-    switch (widget.gameMode) {
-      case GameMode.shapes:
-        final shapeId = widget.shapeMap[value > 0 ? value - 1 : 0];
-        return SizedBox(
-          width: 32,
-          height: 32,
-          child: SudokuShape(id: shapeId, color: kCosmicPrimary),
-        );
-      case GameMode.colors:
-        return Container(
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            color: _getColorForValue(value),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: _getColorForValue(value).withOpacity(0.6),
-                blurRadius: 8,
-                spreadRadius: 1,
-              ),
-            ],
-          ),
-        );
-      case GameMode.planets:
-        return SizedBox(
-          width: 32,
-          height: 32,
-          child: CustomPaint(painter: PlanetPainter(value)),
-        );
-      case GameMode.cosmic:
-        return SizedBox(
-          width: 32,
-          height: 32,
-          child: CustomPaint(painter: CosmicPainter(value)),
-        );
-      default:
-        // Numbers or custom mode - show number
-        return Text(
-          value.toString(),
-          style: TextStyle(
-            color: kCosmicPrimary,
-            fontWeight: FontWeight.bold,
-            fontSize: 28,
-            fontFamily: 'Courier',
-            shadows: [
-              Shadow(
-                color: kCosmicPrimary.withOpacity(0.8),
-                blurRadius: 8,
-              ),
-            ],
-          ),
-        );
-    }
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildSingleElement(BuildContext context, Color color) {
-    final value = widget.value;
-    if (widget.gameMode == GameMode.colors) {
-      return Container(
-        margin: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: _getColorForValue(value),
-          boxShadow: [BoxShadow(color: _getColorForValue(value).withOpacity(0.6), blurRadius: 10, spreadRadius: 1)],
-          shape: BoxShape.circle,
-        ),
-      );
-    } else if (widget.gameMode == GameMode.numbers) {
-      return Text(
-        value.toString(),
-        style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 24, fontFamily: 'Courier'),
-      );
-    } else if (widget.gameMode == GameMode.planets) {
-       return CustomPaint(painter: PlanetPainter(value), size: const Size(32, 32));
-    } else if (widget.gameMode == GameMode.cosmic) {
-       return CustomPaint(painter: CosmicPainter(value), size: const Size(32, 32));
-    } else if (widget.gameMode == GameMode.custom) {
-      return FutureBuilder<List<String?>>(
-        future: CustomImageRepository.loadCustomImages(),
-        builder: (context, snapshot) {
-             if (snapshot.hasData && snapshot.data![value - 1] != null) {
-               return Container(
-                 margin: const EdgeInsets.all(4),
-                 decoration: BoxDecoration(shape: BoxShape.circle, image: DecorationImage(image: FileImage(File(snapshot.data![value - 1]!)), fit: BoxFit.cover)),
-               );
-             }
-             return SudokuShape(id: widget.shapeId, color: color);
-        },
-      );
-    }
-    // Use the mapped shape ID
-    return SudokuShape(id: widget.shapeId, color: color);
-  }
-
-  Widget _buildCombinedElement(CombinedCell cell, ElementType? selectedElement, Color defaultColor) {
-    final int? shapeId = cell.shapeId;
-    final int? colorId = cell.colorId;
-    final int? numberId = cell.numberId;
-
-    final Color shapeColor = colorId != null 
-        ? _getColorForValue(colorId)
-        : Colors.white; // Full white for shapes without color
+    if (widget.value <= 0) return const SizedBox.shrink();
     
-    // For cells with all 3 elements (Expert/Master), use clean integrated design
-    if (shapeId != null && colorId != null && numberId != null) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          // Shape fills the cell with color - similar to Medium
-          Padding(
-            padding: const EdgeInsets.all(4),
-            child: SudokuShape(id: shapeId, color: shapeColor),
-          ),
-          // Number integrated into the shape without box
-          Center(
-            child: Text(
-              numberId.toString(),
-              style: TextStyle(
-                color: Colors.white, // Bright white number
-                fontWeight: FontWeight.w900,
-                fontSize: 22,
-                fontFamily: 'Courier',
-                shadows: [
-                  Shadow(
-                    color: Colors.black.withOpacity(0.8), // Strong black shadow for contrast
-                    blurRadius: 2,
-                    offset: const Offset(1, 1),
-                  ),
-                  Shadow(
-                    color: Colors.black.withOpacity(0.5),
-                    blurRadius: 4,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-    
-    // For Medium (shape + color only)
-    Widget? shapeWidget;
-    if (shapeId != null) {
-      shapeWidget = Padding(
-        padding: const EdgeInsets.all(4),
-        child: SudokuShape(id: shapeId, color: shapeColor),
-      );
-    } else if (colorId != null) {
-       shapeWidget = Container(
-        margin: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: shapeColor,
-          boxShadow: [BoxShadow(color: shapeColor.withOpacity(0.6), blurRadius: 10, spreadRadius: 1)],
-          shape: BoxShape.circle,
-        ),
-      );
-    }
-
-    Widget? numberWidget;
-    if (numberId != null) {
-      final Color numberColor = const Color(0xFF1A1A2E).withOpacity(0.9);
-      numberWidget = Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: null,
-          child: Text(
-            numberId.toString(),
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: numberColor,
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      alignment: Alignment.center,
-      children: [if (shapeWidget != null) shapeWidget, if (numberWidget != null) numberWidget],
+    return Text(
+      widget.value.toString(),
+      style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 24, fontFamily: 'Courier'),
     );
   }
 }
@@ -6569,20 +4557,25 @@ class _LevelCompletionDialogState extends State<LevelCompletionDialog> with Tick
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              const Color(0xFF1A1F3A).withOpacity(0.85),
-              const Color(0xFF0A0E27).withOpacity(0.95),
+              const Color(0xFF1A1F3A).withOpacity(0.60), 
+              const Color(0xFF0A0E27).withOpacity(0.80),
             ],
           ),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: const Color(0xFF4DD0E1).withOpacity(0.3),
+            color: Colors.white.withOpacity(0.1),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF4DD0E1).withOpacity(0.15),
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 30,
+              spreadRadius: 0,
+            ),
+            BoxShadow(
+              color: const Color(0xFF4DD0E1).withOpacity(0.1),
               blurRadius: 20,
-              spreadRadius: 2,
+              spreadRadius: -5,
             ),
           ],
         ),
@@ -6651,7 +4644,6 @@ class _LevelCompletionDialogState extends State<LevelCompletionDialog> with Tick
                         type: CosmicButtonType.secondary,
                         onPressed: () {
                           widget.onClose();
-                          SoundManager().playAmbientMusic();
                         },
                       ),
                     ],
