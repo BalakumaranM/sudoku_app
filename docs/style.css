@@ -135,6 +135,7 @@ header {
   font-weight: 700;
   letter-spacing: -0.02em;
   background: var(--accent-gradient);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -226,12 +227,14 @@ header {
   letter-spacing: -0.03em;
   margin-bottom: 20px;
   background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .hero-title span {
   background: var(--accent-gradient);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
